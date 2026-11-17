@@ -29,6 +29,13 @@ struct ChatListView: View {
         .background(Rose.panel.ignoresSafeArea())
         .onAppear { page = max(0, tabs.firstIndex { $0 == store.tab } ?? 0) }
         .onChange(of: page) { _, now in if tabs.indices.contains(now) { store.tab = tabs[now] } }
+        // The roster changed (a bot added, removed or reordered): the page follows the tab that was open,
+        // or the full list when that bot is gone, so the page, its chip and store.tab never disagree.
+        .onChange(of: tabs) { _, now in
+            let index = now.firstIndex { $0 == store.tab } ?? 0
+            if !now.indices.contains(index) || now[index] != store.tab { store.tab = now.first ?? Store.allTab }
+            if page != index { page = index }
+        }
         .alert("이름 변경", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("이름", text: $newName)
             Button("취소", role: .cancel) { renaming = nil }

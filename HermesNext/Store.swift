@@ -42,6 +42,8 @@ final class Store {
     private var slashFor: String??
     private var slashLoading = false
     private var runtimeId: String?
+    /// Bumped whenever another chat is shown, so a reply for the chat that was on screen is dropped.
+    private var chatToken = 0
     private var storedId: String?
     private var openedId: String?
 
@@ -115,8 +117,10 @@ final class Store {
             Task { await refreshChats() }
             return
         }
+        // One assertion at a time; iOS needs the expired one ended before its handler returns.
+        endBackground()
         background = UIApplication.shared.beginBackgroundTask(withName: "socket") { [weak self] in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.drop(to: .idle)
                 self?.endBackground()
             }
@@ -151,10 +155,13 @@ final class Store {
         approvals = []
         link = state
         // A question without a receipt may or may not have arrived; it is never sent again by itself.
+        // Marked first, removed after: removing inside the loop shortened the list under its own indices.
+        var unsent = false
         for index in messages.indices where messages[index].status == .sending {
             messages[index].status = .failed("연결이 끊겨 보냈는지 알 수 없어요")
-            messages.removeAll { $0.role == .assistant && $0.status == .writing && $0.text.isEmpty }
+            unsent = true
         }
+        if unsent { messages.removeAll { $0.role == .assistant && $0.status == .writing && $0.text.isEmpty } }
     }
 
     private func connect() {
@@ -177,6 +184,9 @@ final class Store {
                     request.setValue(cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
                 }
                 let task = session.webSocketTask(with: request)
+                // URLSession closes a socket on any frame over 1 MB (close code 1009). A chat with long answers or
+                // pictures resumes in one bigger frame, so the app dropped and redialed every few seconds.
+                task.maximumMessageSize = 64 * 1024 * 1024
                 socket = task
                 task.resume()
                 receive(task, gen)
@@ -208,7 +218,15 @@ final class Store {
             while gen == generation {
                 try? await Task.sleep(for: .seconds(15))
                 guard gen == generation else { return }
-                task.sendPing { _ in }
+                // A failed ping is a dead socket that receive() may not notice for minutes.
+                task.sendPing { [weak self] error in
+                    guard error != nil else { return }
+                    Task { @MainActor in
+                        guard let self, gen == self.generation else { return }
+                        self.drop(to: .offline)
+                        self.retryLater(self.generation)
+                    }
+                }
             }
         }
     }
@@ -271,8 +289,6 @@ final class Store {
         return true
     }
 
-    private static let windowOwned: Set<String> = ["preview.read", "preview.act", "terminal.read", "window.read", "tour"]
-
     private func handle(_ frame: JSON) {
         guard let method = frame["method"] as? String else {
             guard let id = (frame["id"] as? NSNumber)?.intValue, let done = pending.removeValue(forKey: id) else { return }
@@ -280,9 +296,11 @@ final class Store {
             return
         }
         let params = frame.object("params") ?? [:]
-        if Store.windowOwned.contains(method) {
-            // Only a window showing the session can answer these.
-            if let id = rpcId(frame["id"]) { sendRaw("{\"jsonrpc\":\"2.0\",\"id\":\(id),\"error\":{\"code\":4090,\"message\":\"No app window shows this session\"}}") }
+        if method != "approval", method != "event" {
+            // Any other server request (window reads, clarify, sudo, secrets) is one this app cannot answer.
+            // Declining with the server's not-shown code lets a window that can answer it do so, and keeps the
+            // run from waiting for the request's timeout.
+            if let id = rpcId(frame["id"]) { sendRaw("{\"jsonrpc\":\"2.0\",\"id\":\(id),\"error\":{\"code\":4404,\"message\":\"No app window shows this session\"}}") }
             return
         }
         if method == "approval" {
@@ -471,6 +489,7 @@ final class Store {
         messages = []
         approvals = []
         opening = false
+        chatToken += 1
         markRunning()
     }
 
@@ -486,6 +505,7 @@ final class Store {
         messages = []
         approvals = []
         opening = true
+        chatToken += 1
         markRunning()
         Task {
             await resume(row.id)
@@ -507,14 +527,17 @@ final class Store {
         storedId = result.text("stored_session_id") ?? result.text("session_key") ?? result.object("info")?.text("stored_session_id") ?? stored
         let history = result["messages"] is [Any] ? Parse.history(result.rows("messages")) : nil
         let running = result.flag("running") ?? result.object("info")?.flag("running") ?? false
-        // The transcript already holds this screen's own messages after a reconnect.
-        if messages.isEmpty, let history { messages = history }
+        // With nothing running the server's transcript is the whole truth: it holds an answer that finished
+        // while the socket was away and messages sent from other devices. A running turn keeps this screen's rows.
+        if let history, !history.isEmpty, messages.isEmpty || !running { messages = history }
         if running, messages.last?.status != .writing { messages.append(Message(id: UUID().uuidString, role: .assistant, text: "", status: .writing)) }
         if !running, let index = messages.lastIndex(where: { $0.status == .writing }) {
             // The answer finished while the socket was away: the transcript has all of it.
             if let whole = history?.last(where: { $0.role == .assistant })?.text, whole.count >= messages[index].text.count { messages[index].text = whole }
             messages[index].status = .done
         }
+        // Approvals still waiting were sent before this socket attached; the server hands them over here.
+        for request in result.rows("open_requests") { handle(request) }
         rememberLastLine()
         markRunning()
     }
@@ -522,7 +545,7 @@ final class Store {
     /// The slash menu opened: its rows are read once per bot and kept, so typing never waits on the server.
     func loadSlash() {
         let key: String?? = .some(profile)
-        if slashLoading || (slashFor == key && slashItems != nil) { return }
+        if slashFor == key && (slashLoading || slashItems != nil) { return }
         if slashFor != key { slashItems = nil }
         slashFor = key
         slashLoading = true
@@ -546,10 +569,10 @@ final class Store {
         messages.append(Message(id: UUID().uuidString, role: .assistant, text: "", status: .writing))
         UserDefaults.standard.set("", forKey: "draft")
         markRunning()
-        let target = openedId
+        let token = chatToken
         let command = SlashCommand.parse(text)
         Task {
-            guard let live = await session(for: target, question: question.id) else { return }
+            guard let live = await session(token, question: question.id) else { return }
             if let command {
                 await run(command, typed: text, live: live, question: question.id)
             } else {
@@ -558,13 +581,21 @@ final class Store {
         }
     }
 
-    /// The chat's live session, created on the first message of a new chat.
-    private func session(for target: String?, question: String) async -> String? {
+    /// The chat's live session: an opened chat is resumed (after a reconnect too), a new chat is created on
+    /// its first message. Nil when another chat was shown meanwhile.
+    private func session(_ token: Int, question: String) async -> String? {
         if let runtimeId { return runtimeId }
+        if let stored = storedId {
+            await resume(stored)
+            guard chatToken == token else { return nil }
+            if let runtimeId { return runtimeId }
+            fail(question, "대화를 다시 열지 못했어요")
+            return nil
+        }
         var params: JSON = [:]
         if authority { params["request_id"] = UUID().uuidString }
         let (result, error) = await call("session.create", params, profile: profile)
-        guard openedId == target else { return nil }
+        guard chatToken == token else { return nil }
         guard let result, let live = result.text("session_id") else { fail(question, error ?? "새 대화를 만들지 못했어요"); return nil }
         runtimeId = live
         storedId = result.text("stored_session_id") ?? result.text("session_key") ?? result.object("info")?.text("stored_session_id")

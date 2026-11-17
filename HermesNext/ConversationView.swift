@@ -4,8 +4,11 @@ import SwiftUI
 struct ConversationView: View {
     @Environment(Store.self) private var store
     @Environment(\.horizontalSizeClass) private var width
-    let back: () -> Void
+    /// Back to the list; `slide` is false when a swipe already moved the screen away.
+    let back: (_ slide: Bool) -> Void
     @FocusState private var typing: Bool
+    /// How far a swipe back has moved the screen; 0 when no swipe is going on.
+    @State private var swipe: CGFloat = 0
 
     var body: some View {
         @Bindable var store = store
@@ -29,6 +32,8 @@ struct ConversationView: View {
             input(draft: $store.draft)
         }
         .background(Rose.panel.ignoresSafeArea())
+        .offset(x: swipe)
+        .simultaneousGesture(swipeBack, including: width == .compact ? .all : .subviews)
         // The draft is kept once typing pauses, not on every key.
         .task(id: store.draft) {
             try? await Task.sleep(for: .milliseconds(700))
@@ -36,9 +41,36 @@ struct ConversationView: View {
         }
     }
 
+    /// On a phone, a swipe to the right that starts on the left half of the screen goes back to the list. The
+    /// screen follows the finger and settles back when the swipe is short. A mostly vertical drag (scrolling)
+    /// or one starting on the right half (a wide code block or table) is left alone.
+    private var swipeBack: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .global)
+            .onChanged { drag in
+                let screen = UIScreen.main.bounds.width
+                guard drag.startLocation.x < screen / 2, drag.translation.width > 0,
+                      abs(drag.translation.width) > abs(drag.translation.height) * 1.5 else { return }
+                swipe = drag.translation.width
+            }
+            .onEnded { drag in
+                guard swipe > 0 else { return }
+                let screen = UIScreen.main.bounds.width
+                if drag.translation.width > screen * 0.3 || drag.predictedEndTranslation.width > screen * 0.6 {
+                    typing = false
+                    withAnimation(.easeOut(duration: 0.18)) { swipe = screen } completion: {
+                        // The screen is already off to the side: it goes from there, with no second slide.
+                        // The offset is left as it is; the view is gone and a new one starts at zero.
+                        back(false)
+                    }
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { swipe = 0 }
+                }
+            }
+    }
+
     private var header: some View {
         HStack(spacing: 9) {
-            if width == .compact { RoundIcon(system: "chevron.left", label: "대화 목록", action: back) }
+            if width == .compact { RoundIcon(system: "chevron.left", label: "대화 목록") { back(true) } }
             BotAvatar(image: store.avatars[store.openBot?.name ?? "default"], size: 42)
             VStack(alignment: .leading, spacing: 2) {
                 Text(store.title ?? (store.messages.isEmpty ? "새 대화" : "대화")).font(.app(size: 16.5, weight: .bold)).foregroundStyle(Rose.text).lineLimit(1)
@@ -69,8 +101,13 @@ struct ConversationView: View {
     @State private var shown = 120
 
     private var transcript: some View {
-        let first = max(0, store.messages.count - shown)
-        return ScrollViewReader { proxy in
+        ScrollViewReader { proxy in
+            // One copy of the messages for this drawing: the range, the rows and each row's neighbour all come
+            // from it. Reading the store again inside the rows crashed when another chat opened between the two
+            // reads and the list got shorter (a range whose start passed its end).
+            let messages = store.messages
+            let first = max(0, messages.count - shown)
+            let rows = Array(messages.enumerated().dropFirst(first))
             ScrollView {
                 // A plain stack, not a lazy one: a lazy stack pinned to the bottom skipped rows whose height it
                 // guessed wrong, so an opened chat stayed blank and a sent question did not show.
@@ -82,11 +119,10 @@ struct ConversationView: View {
                         }
                         .buttonStyle(.plain).frame(maxWidth: .infinity)
                     }
-                    ForEach(first..<store.messages.count, id: \.self) { index in
-                        let message = store.messages[index]
+                    ForEach(rows, id: \.element.id) { index, message in
                         MessageView(message: message, botTitle: store.openBot?.title, image: store.avatars[store.openBot?.name ?? "default"],
                                     // The bot is named once per answer, not on each part a tool call split it into.
-                                    named: index == 0 || store.messages[index - 1].role == .user)
+                                    named: index == 0 || messages[index - 1].role == .user)
                             // Only the message that changed is drawn again while an answer streams.
                             .equatable()
                             .id(message.id)

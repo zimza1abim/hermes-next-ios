@@ -156,23 +156,47 @@ struct SignInWeb: UIViewRepresentable {
     }
 }
 
-/// The chats beside the conversation on an iPad; one after the other on an iPhone.
+/// The chats beside the conversation on an iPad. On an iPhone the conversation lies over the list, so a swipe
+/// back shows the list underneath as the conversation slides away.
 struct MainView: View {
     @Environment(Store.self) private var store
-    @State private var column: NavigationSplitViewColumn = .sidebar
+    @Environment(\.horizontalSizeClass) private var size
     @State private var visibility: NavigationSplitViewVisibility = .doubleColumn
+    @State private var chatShown = false
     @State private var menu = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $visibility, preferredCompactColumn: $column) {
-            ChatListView(openMenu: { menu = true }, showChat: { column = .detail })
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 460)
-        } detail: {
-            ConversationView(back: { column = .sidebar })
-                .toolbar(.hidden, for: .navigationBar)
+        Group {
+            if size == .compact {
+                ZStack {
+                    ChatListView(openMenu: { menu = true }, showChat: { withAnimation(.snappy(duration: 0.28)) { chatShown = true } })
+                    if chatShown {
+                        ConversationView(back: { slide in
+                            if slide {
+                                withAnimation(.snappy(duration: 0.28)) { chatShown = false }
+                            } else {
+                                var instant = Transaction()
+                                instant.disablesAnimations = true
+                                withTransaction(instant) { chatShown = false }
+                            }
+                        })
+                            .shadow(color: .black.opacity(0.12), radius: 12, x: -4)
+                            .transition(.move(edge: .trailing))
+                            .zIndex(1)
+                    }
+                }
+            } else {
+                NavigationSplitView(columnVisibility: $visibility) {
+                    ChatListView(openMenu: { menu = true }, showChat: {})
+                        .toolbar(.hidden, for: .navigationBar)
+                        .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 460)
+                } detail: {
+                    ConversationView(back: { _ in })
+                        .toolbar(.hidden, for: .navigationBar)
+                }
+                .navigationSplitViewStyle(.balanced)
+            }
         }
-        .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $menu) { MenuView() }
     }
 }
