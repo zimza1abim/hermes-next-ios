@@ -1,43 +1,140 @@
+<div align="center">
+
+<img src="HermesNext/Assets.xcassets/HermesIcon.imageset/hermes.png" width="112" alt="Hermes Next icon">
+
 # Hermes Next for iOS
 
-A native iPhone and iPad client for a [Hermes](https://github.com/NousResearch/hermes-agent) Webapp
-server. It talks to the server's own gateway socket and HTTP API, so the chats, bots and settings are
-the same ones you see in the Webapp and on other devices. No web page is loaded for chatting.
+**A native iPhone and iPad client for a gateway-enabled [Hermes Agent Webapp](https://github.com/NousResearch/hermes-agent).**
 
-Bundle id `dev.hermes.next`, version 1.0.0, iOS 17 or later.
+[![iOS](https://img.shields.io/badge/iOS-17%2B-000000?logo=apple&logoColor=white)](#requirements)
+[![Swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)](#build-from-source)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Features
+[What it does](#what-it-does) ·
+[Get started](#get-started) ·
+[Limitations](#current-limitations) ·
+[Build](#build-from-source)
 
-- **Chats.** Every chat of every bot in one list, newest first, plus one tab per bot. Swipe sideways
-  between tabs. Search by title or text.
-- **Sections.** Bot chats, app chats, each messaging platform (Telegram, Discord, ...) and cron runs
-  are listed apart.
-- **Live answers.** Answers stream in as they are written. Stop a running answer. Approve or deny a
-  command Hermes asks to run.
-- **Readable answers.** Headings, lists, quotes, tables and code blocks drawn as an editor pane with
-  line numbers, token colors and a copy button.
-- **Chat actions.** Long-press a chat to rename, pin, archive or delete it. Archived chats can be
-  brought back from the menu.
-- **Unread marks.** A chat with a new answer blinks until it is opened; opening it marks it read on
-  every device.
-- **Bots.** Each bot's picture and name; a new chat starts with the bot of the open tab.
-- **Menu.** Cron jobs (run now, pause, resume), the skills, toolsets and MCP servers a bot has, and
-  installing catalog plugins and MCP servers. Every list can be searched.
-- **Fonts.** Pick any iOS font or import TTF, OTF or TTC files. The font is registered before the first
-  frame and applies to every screen.
-- **iPad.** The chat list sits beside the conversation; text keeps a readable line length.
+</div>
+
+---
+
+Hermes Next connects directly to your Hermes server's gateway socket and HTTP
+API. Chats, bots, and server-side settings stay shared with the official
+Webapp and your other devices, while everyday chat happens in native SwiftUI
+screens—not in an embedded web page.
+
+## Screenshots
+
+### Main tab
+
+![Main tab](docs/screenshots/main.png)
+
+### Conversation
+
+![Conversation](docs/screenshots/chat.png)
+
+### Plugins and MCP
+
+![Plugins and MCP](docs/screenshots/plugin.png)
+
+### Font selection
+
+![Font selection](docs/screenshots/font.png)
+
+| | |
+|---|---|
+| **Bundle ID** | `dev.hermes.next` |
+| **Version** | `1.0.0` |
+| **Platforms** | iPhone and iPad, iOS 17 or later |
+| **Server** | A signed-in Hermes Agent Webapp with `/api/webapp/socket-ticket` and `/api/ws` |
 
 ## Requirements
 
-- A Hermes Webapp server with the gateway enabled (`/api/webapp/socket-ticket` and `/api/ws`).
-- An account on that server. Sign-in happens on the server's own page inside the app.
+- An iPhone or iPad running iOS 17 or later.
+- A Hermes Agent Webapp server with gateway endpoints enabled.
+- An account that can sign in to that server.
 
-## Build
+## What it does
 
-Open `HermesNext.xcodeproj` in Xcode 16 or later, choose your team under
-**Signing & Capabilities**, and run on a device or simulator.
+- **Native conversations.** Browse every bot's chats, start a new one, search
+  titles and message text, and receive streamed answers as they are written.
+- **Useful chat controls.** Stop a turn; approve or deny a command; rename,
+  pin, archive, restore, or delete chats. Those changes are saved on the
+  server, so they appear on other clients.
+- **A clear overview.** Chats are organized into bot, app, messaging-platform,
+  and cron sections. Unread or actively writing chats are visibly marked.
+- **Readable output.** Markdown answers support headings, lists, quotes,
+  tables, and syntax-coloured code blocks with line numbers and copy controls.
+- **Bot-aware navigation.** Switch between the all-chats view and a tab for
+  each bot. A new chat uses the bot in the current tab.
+- **Server tools.** Browse and search cron jobs, skills, toolsets, MCP servers,
+  plugins, and MCP catalog entries. Run, pause, or resume cron jobs; install
+  catalog entries after confirmation.
+- **Personal presentation.** Choose an installed iOS font or import TTF, OTF,
+  and TTC files. The chosen font is registered before the first screen draws.
+- **Designed for iPad.** The chat list and conversation appear side by side on
+  iPad; message text is kept to a readable width.
 
-Compile without signing:
+## Get started
+
+1. Run Hermes Agent's official Webapp on a computer or server you control, and
+   make it reachable from the device—prefer HTTPS or a trusted private network.
+2. Install or build Hermes Next, then enter the server's base address, for
+   example `https://hermes.example.com`.
+3. Tap **Sign in** and complete authentication on the server's own page.
+4. Return to Hermes Next. The app validates the endpoint, opens its native
+   chat view, and reconnects whenever it returns to the foreground.
+
+The app accepts `http` and `https` addresses, but HTTPS is strongly recommended
+outside a private development network. Do not use a temporary sign-in URL as
+the saved server address.
+
+## Current limitations
+
+This is a foreground-focused native client. iOS can suspend network work after
+an app enters the background, so Hermes Next does not promise background
+gateway monitoring or push notifications.
+
+The following remain in the official Webapp for now:
+
+- photo attachments and model selection;
+- answering free-form clarification questions;
+- any server feature that is not exposed by the native menu.
+
+The gateway protocol used by Hermes is not a public, stable API. Update this
+app alongside Hermes Agent when a server release changes gateway behaviour.
+
+## Privacy and data
+
+- Hermes Next connects only to the server address you save. It contains no
+  analytics, advertising, or crash-reporting service.
+- Authentication cookies are retained in the iOS Keychain. The app refreshes
+  its stored copy after server responses so rotated sign-in cookies survive an
+  app restart.
+- The saved server address, draft, recent preview lines, selected font, and
+  imported fonts live in the app's own storage. Bot images are cached locally.
+- Conversation content is sent to and retained by the Hermes server you choose;
+  secure that server and its network route accordingly.
+
+## Build from source
+
+### Xcode
+
+Open `HermesNext.xcodeproj` in Xcode 16 or later, select the **HermesNext**
+target, choose your signing team under **Signing & Capabilities**, then run it
+on an iPhone, iPad, or simulator.
+
+### Command line
+
+Build a simulator target:
+
+```sh
+xcodebuild -project HermesNext.xcodeproj -scheme HermesNext \
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build
+```
+
+Build an unsigned device archive for CI or later signing:
 
 ```sh
 xcodebuild -project HermesNext.xcodeproj -scheme HermesNext \
@@ -45,43 +142,28 @@ xcodebuild -project HermesNext.xcodeproj -scheme HermesNext \
   -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
 ```
 
-To install without a paid developer account, package the unsigned app as an IPA
-(`Payload/HermesNext.app`, zipped) and add it to a sideloading tool such as LiveContainer, AltStore
-or Sideloadly. A free account can have only three self-signed apps installed on a device at a time.
+To put a build on a physical device, sign it with an Apple development or
+distribution certificate. Sideloading tools can re-sign an IPA with their own
+certificate; their device and account limits are determined by Apple and the
+tool you choose.
 
-## Privacy
+## Project map
 
-- The app connects only to the server address you enter. There is no analytics, tracking or crash
-  reporting.
-- Sign-in cookies are kept in the iOS keychain on the device, so a restart does not sign you out.
-  The server rotates them; the app always keeps the newest copy.
-- Chat previews, the draft you are typing, bot pictures and imported fonts are stored in the app's
-  own container and never leave the device.
-
-## Not included
-
-Notifications (iOS closes the socket in the background), photo attachments, the model picker and
-answering Hermes's clarifying questions. Use the Webapp for those.
-
-## Layout
-
-| File | What it does |
+| Path | Responsibility |
 |---|---|
-| `Server.swift` | Signed HTTP requests, one at a time (the sign-in uses single-use refresh tokens), cookie storage, and the parsers for the server's lists. |
-| `Store.swift` | The gateway socket (JSON-RPC over WebSocket) and all the state the screens show. |
-| `ChatListView.swift` | The chat list, tabs and chat actions. |
-| `ConversationView.swift` | One conversation and the input field. |
-| `MenuView.swift` | Cron, capabilities, install, archive, fonts and server settings. |
-| `Markdown.swift`, `MarkdownView.swift` | Parsing and drawing answers. |
-| `Fonts.swift` | Font registration and the app-wide text style. |
-| `Theme.swift` | Colors and shared controls. |
+| `HermesNextApp.swift` | App lifecycle, endpoint setup, and the server sign-in sheet |
+| `Server.swift` | HTTP requests, endpoint parsing, cookie storage, and API response parsing |
+| `Store.swift` | Gateway WebSocket, chat state, and server actions |
+| `ChatListView.swift` | Chat list, search, bot tabs, and chat actions |
+| `ConversationView.swift` | Transcript, streaming responses, approvals, and composer |
+| `MenuView.swift` | Cron, capabilities, catalog installs, archives, fonts, and server settings |
+| `Markdown.swift`, `MarkdownView.swift` | Markdown parsing and rendering |
+| `Fonts.swift`, `Theme.swift` | Font registration, colour palette, and shared controls |
 
-## Credits
+## Credits and license
 
-The color palette and the app icon come from
-[hermes-android](https://github.com/hermes-webui/hermes-android) (MIT). This project is not affiliated
-with Nous Research.
+The colour palette and app icon are derived from
+[hermes-android](https://github.com/hermes-webui/hermes-android) (MIT).
+Hermes Next is independent of and not affiliated with Nous Research.
 
-## License
-
-MIT. See [LICENSE](LICENSE).
+Licensed under the [MIT License](LICENSE).
