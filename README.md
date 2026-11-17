@@ -26,21 +26,14 @@ screens—not in an embedded web page.
 
 ## Screenshots
 
-### Main tab
-
-![Main tab](docs/screenshots/main.png)
-
-### Conversation
-
-![Conversation](docs/screenshots/chat.png)
-
-### Plugins and MCP
-
-![Plugins and MCP](docs/screenshots/plugin.png)
-
-### Font selection
-
-![Font selection](docs/screenshots/font.png)
+<table align="center">
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/main.png" width="200" alt="Chats"><br><sub><b>Chats</b></sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/chat.png" width="200" alt="Conversation"><br><sub><b>Conversation</b></sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/plugin.png" width="200" alt="Plugins and MCP"><br><sub><b>Plugins and MCP</b></sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/font.png" width="200" alt="Fonts"><br><sub><b>Fonts</b></sub></td>
+  </tr>
+</table>
 
 | | |
 |---|---|
