@@ -1,0 +1,256 @@
+import SwiftUI
+
+/// One conversation: the transcript, the answer as it is written, and the input.
+struct ConversationView: View {
+    @Environment(Store.self) private var store
+    @Environment(\.horizontalSizeClass) private var width
+    let back: () -> Void
+    @FocusState private var typing: Bool
+
+    var body: some View {
+        @Bindable var store = store
+        VStack(spacing: 0) {
+            header
+            if store.messages.isEmpty && store.approvals.isEmpty {
+                if store.opening { Spacer(); ProgressView().tint(Rose.deep); Spacer() } else { greeting }
+            } else {
+                transcript
+            }
+            if store.link == .offline {
+                HStack {
+                    Text("서버에 닿지 않아요. 쓰던 글은 그대로 있어요").font(.app(size: 13.5)).foregroundStyle(Rose.text)
+                    Spacer()
+                    PillButton(label: "다시 연결") { store.reconnect() }
+                }
+                .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 8)
+                .background(Rose.soft).clipShape(RoundedRectangle(cornerRadius: 20)).padding(.horizontal, 20).padding(.bottom, 8)
+            }
+            input(draft: $store.draft)
+        }
+        .background(Rose.panel.ignoresSafeArea())
+        // The draft is kept once typing pauses, not on every key.
+        .task(id: store.draft) {
+            try? await Task.sleep(for: .milliseconds(700))
+            if !Task.isCancelled { UserDefaults.standard.set(store.draft, forKey: "draft") }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 9) {
+            if width == .compact { RoundIcon(system: "chevron.left", label: "대화 목록", action: back) }
+            BotAvatar(image: store.avatars[store.openBot?.name ?? "default"], size: 42)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.title ?? (store.messages.isEmpty ? "새 대화" : "대화")).font(.app(size: 16.5, weight: .bold)).foregroundStyle(Rose.text).lineLimit(1)
+                HStack(spacing: 6) {
+                    let writing = store.messages.last?.status == .writing
+                    StatusDot(color: writing ? Rose.deep : store.link.color, blinking: writing || store.link == .connecting)
+                    Text(writing ? "WRITING" : store.link.label).font(.app(size: 10.5, design: .monospaced)).foregroundStyle(Rose.muted)
+                }
+            }
+            Spacer()
+            RoundIcon(system: "plus", label: "새 대화", filled: true) { store.newChat(profile: store.profile) }
+        }
+        .padding(.leading, width == .compact ? 8 : 20).padding(.trailing, 14).padding(.top, 10).padding(.bottom, 6)
+    }
+
+    private var greeting: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Spacer()
+            Text("반가워요").font(.app(size: 13)).foregroundStyle(Rose.muted)
+            Text("무엇을 도와드릴까요?").font(.app(size: 26, weight: .bold, design: .serif)).foregroundStyle(Rose.text)
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity).padding(.horizontal, 24)
+    }
+
+    /// How many of the newest messages are drawn; earlier ones come in on a tap.
+    @State private var shown = 120
+
+    private var transcript: some View {
+        let first = max(0, store.messages.count - shown)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                // A plain stack, not a lazy one: a lazy stack pinned to the bottom skipped rows whose height it
+                // guessed wrong, so an opened chat stayed blank and a sent question did not show.
+                VStack(alignment: .leading, spacing: 22) {
+                    if first > 0 {
+                        Button { shown += 120 } label: {
+                            Text("이전 메시지 \(first)개 더 보기").font(.app(size: 13)).foregroundStyle(Rose.chipText)
+                                .padding(.horizontal, 14).frame(minHeight: 36).background(Rose.soft).clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain).frame(maxWidth: .infinity)
+                    }
+                    ForEach(first..<store.messages.count, id: \.self) { index in
+                        let message = store.messages[index]
+                        MessageView(message: message, botTitle: store.openBot?.title, image: store.avatars[store.openBot?.name ?? "default"],
+                                    // The bot is named once per answer, not on each part a tool call split it into.
+                                    named: index == 0 || store.messages[index - 1].role == .user)
+                            // Only the message that changed is drawn again while an answer streams.
+                            .equatable()
+                            .id(message.id)
+                    }
+                    ForEach(store.approvals) { request in ApprovalCard(request: request) }
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                // A readable line length on an iPad: the text does not run the full width of the screen.
+                .frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
+                .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            // To the newest message once the rows are laid out: on opening, on each new message, as an answer grows.
+            .onAppear { toBottom(proxy) }
+            .onChange(of: store.openRow?.key) { _, _ in
+                shown = 120
+                toBottom(proxy)
+            }
+            .onChange(of: store.messages.count) { _, _ in toBottom(proxy, animated: true) }
+            .onChange(of: store.messages.last?.text.count ?? 0) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+
+    private func toBottom(_ proxy: ScrollViewProxy, animated: Bool = false) {
+        DispatchQueue.main.async {
+            if animated { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } } else { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+
+    private func input(draft: Binding<String>) -> some View {
+        let writing = store.busy
+        let ready = !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !writing
+        return HStack(alignment: .bottom, spacing: 6) {
+            TextField("", text: draft, prompt: Text("무엇이든 물어보세요").foregroundStyle(Rose.muted), axis: .vertical)
+                .lineLimit(1...6).font(.app(size: 16)).foregroundStyle(Rose.text).tint(Rose.deep)
+                .focused($typing).padding(.leading, 14).padding(.vertical, 12)
+            if writing {
+                Button { store.stop() } label: {
+                    RoundedRectangle(cornerRadius: 3).fill(Rose.deep).frame(width: 13, height: 13)
+                        .frame(width: 44, height: 44).overlay(Circle().stroke(Rose.deep, lineWidth: 2))
+                }
+                .buttonStyle(.plain).accessibilityLabel("답변 중지")
+            } else {
+                Button {
+                    typing = false
+                    store.send()
+                } label: {
+                    Image(systemName: "arrow.up").font(.app(size: 17, weight: .bold)).foregroundStyle(ready ? Color.white : Rose.deep)
+                        .frame(width: 44, height: 44).background(ready ? Rose.deep : Color(hex: 0xF3D5E3)).clipShape(Circle())
+                }
+                .buttonStyle(.plain).disabled(!ready).accessibilityLabel("보내기")
+            }
+        }
+        .padding(6)
+        .background(Rose.field).clipShape(RoundedRectangle(cornerRadius: 28))
+        .overlay(RoundedRectangle(cornerRadius: 28).stroke(typing ? Rose.rose : Rose.border, lineWidth: typing ? 1.5 : 1))
+        .frame(maxWidth: 760).frame(maxWidth: .infinity)
+        .padding(.horizontal, 20).padding(.bottom, 12).padding(.top, 6)
+    }
+}
+
+private struct MessageView: View, Equatable {
+    let message: Message
+    let botTitle: String?
+    let image: UIImage?
+    let named: Bool
+    @State private var open = false
+
+    nonisolated static func == (a: MessageView, b: MessageView) -> Bool {
+        a.message == b.message && a.botTitle == b.botTitle && a.image === b.image && a.named == b.named
+    }
+
+    var body: some View {
+        switch message.role {
+        case .user:
+            VStack(alignment: .trailing, spacing: 5) {
+                // A long question is cut and opens in full on a tap.
+                Text(message.text).font(.app(size: 15.5)).lineSpacing(5).foregroundStyle(Rose.text).lineLimit(open ? nil : 12)
+                    .padding(.horizontal, 15).padding(.vertical, 11)
+                    .background(Rose.bubble)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20))
+                    .onTapGesture { open.toggle() }
+                switch message.status {
+                case .sending: Text("보내는 중").font(.app(size: 10.5)).foregroundStyle(Rose.muted)
+                case .failed(let reason): Text(reason).font(.app(size: 12)).foregroundStyle(Rose.deep)
+                default: EmptyView()
+                }
+            }
+            .frame(maxWidth: 520, alignment: .trailing).frame(maxWidth: .infinity, alignment: .trailing)
+        case .assistant:
+            VStack(alignment: .leading, spacing: 8) {
+                if named {
+                    HStack(spacing: 8) {
+                        BotAvatar(image: image, size: 42)
+                        Text("@\(botTitle ?? "Hermes")").font(.app(size: 13.5, weight: .semibold)).foregroundStyle(Rose.deep)
+                    }
+                }
+                if message.text.isEmpty {
+                    if message.status == .writing { ThinkingDots() } else { Text("답변이 비어 있어요").font(.app(size: 13)).foregroundStyle(Rose.muted) }
+                } else {
+                    MarkdownView(text: message.text)
+                }
+                switch message.status {
+                case .stopped: Text("멈췄어요").font(.app(size: 13)).foregroundStyle(Rose.muted)
+                case .failed(let reason): Text(reason).font(.app(size: 13)).foregroundStyle(Rose.deep)
+                case .done where !message.text.isEmpty: CopyButton(text: message.text)
+                default: EmptyView()
+                }
+            }
+        }
+    }
+}
+
+struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.6))
+                copied = false
+            }
+        } label: {
+            Label(copied ? "복사됨" : "복사", systemImage: copied ? "checkmark" : "doc.on.doc").font(.app(size: 13)).foregroundStyle(Rose.text)
+                .padding(.horizontal, 12).frame(minHeight: 36)
+                .background(Rose.field).clipShape(Capsule()).overlay(Capsule().stroke(Rose.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ThinkingDots: View {
+    @State private var on = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle().fill(Rose.rose).frame(width: 7, height: 7).opacity(on ? 1 : 0.3)
+                    .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(index) * 0.2), value: on)
+            }
+        }
+        .padding(.vertical, 8)
+        .onAppear { on = true }
+    }
+}
+
+private struct ApprovalCard: View {
+    @Environment(Store.self) private var store
+    let request: ApprovalRequest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("명령을 실행해도 될까요?").font(.app(size: 15, weight: .bold)).foregroundStyle(Rose.text)
+            Text(request.command).font(.app(size: 13, design: .monospaced)).foregroundStyle(Rose.text).lineLimit(6)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Rose.soft).clipShape(RoundedRectangle(cornerRadius: 12))
+            HStack(spacing: 8) {
+                PillButton(label: "거절") { store.answer(request, allow: false) }
+                PillButton(label: "한 번 허용", filled: true) { store.answer(request, allow: true) }
+            }
+        }
+        .padding(18).background(Rose.field).clipShape(RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Rose.rose, lineWidth: 1))
+    }
+}
