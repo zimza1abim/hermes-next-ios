@@ -37,6 +37,10 @@ final class Store {
     var opening = false
     var approvals: [ApprovalRequest] = []
     var draft = UserDefaults.standard.string(forKey: "draft") ?? ""
+    /// The slash menu of `slashFor`'s bot; nil until it was read.
+    var slashItems: [SlashItem]?
+    private var slashFor: String??
+    private var slashLoading = false
     private var runtimeId: String?
     private var storedId: String?
     private var openedId: String?
@@ -515,6 +519,23 @@ final class Store {
         markRunning()
     }
 
+    /// The slash menu opened: its rows are read once per bot and kept, so typing never waits on the server.
+    func loadSlash() {
+        let key: String?? = .some(profile)
+        if slashLoading || (slashFor == key && slashItems != nil) { return }
+        if slashFor != key { slashItems = nil }
+        slashFor = key
+        slashLoading = true
+        Task {
+            var params: JSON = [:]
+            if let runtimeId { params["session_id"] = runtimeId }
+            let (result, _) = await call("commands.catalog", params, profile: profile)
+            slashLoading = false
+            guard slashFor == key else { return }
+            if let result { slashItems = Parse.slashCatalog(result) } else if slashItems == nil { slashFor = nil }
+        }
+    }
+
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
@@ -526,25 +547,79 @@ final class Store {
         UserDefaults.standard.set("", forKey: "draft")
         markRunning()
         let target = openedId
+        let command = SlashCommand.parse(text)
         Task {
-            if runtimeId == nil {
-                var params: JSON = [:]
-                if authority { params["request_id"] = UUID().uuidString }
-                let (result, error) = await call("session.create", params, profile: profile)
-                guard openedId == target else { return }
-                guard let result, let live = result.text("session_id") else { return fail(question.id, error ?? "새 대화를 만들지 못했어요") }
-                runtimeId = live
-                storedId = result.text("stored_session_id") ?? result.text("session_key") ?? result.object("info")?.text("stored_session_id")
-                openedId = storedId
+            guard let live = await session(for: target, question: question.id) else { return }
+            if let command {
+                await run(command, typed: text, live: live, question: question.id)
+            } else {
+                await submit(text, live: live, question: question.id)
             }
-            guard let live = runtimeId else { return }
-            var params: JSON = ["session_id": live, "text": text]
-            if authority { params["submission_id"] = UUID().uuidString }
-            let (result, error) = await call("prompt.submit", params, profile: profile)
-            guard runtimeId == live else { return }
-            if result == nil { return fail(question.id, error ?? "보내지 못했어요") }
-            if let index = messages.firstIndex(where: { $0.id == question.id }) { messages[index].status = .done }
         }
+    }
+
+    /// The chat's live session, created on the first message of a new chat.
+    private func session(for target: String?, question: String) async -> String? {
+        if let runtimeId { return runtimeId }
+        var params: JSON = [:]
+        if authority { params["request_id"] = UUID().uuidString }
+        let (result, error) = await call("session.create", params, profile: profile)
+        guard openedId == target else { return nil }
+        guard let result, let live = result.text("session_id") else { fail(question, error ?? "새 대화를 만들지 못했어요"); return nil }
+        runtimeId = live
+        storedId = result.text("stored_session_id") ?? result.text("session_key") ?? result.object("info")?.text("stored_session_id")
+        openedId = storedId
+        return live
+    }
+
+    private func submit(_ text: String, live: String, question: String) async {
+        var params: JSON = ["session_id": live, "text": text]
+        if authority { params["submission_id"] = UUID().uuidString }
+        let (result, error) = await call("prompt.submit", params, profile: profile)
+        guard runtimeId == live else { return }
+        if result == nil { return fail(question, error ?? "보내지 못했어요") }
+        if let index = messages.firstIndex(where: { $0.id == question }) { messages[index].status = .done }
+    }
+
+    /// A slash command: the server says whether it is output to show, a prompt to send, or text for the field.
+    private func run(_ command: SlashCommand, typed: String, live: String, question: String, hops: Int = 0) async {
+        let (result, _) = await call("command.dispatch", ["session_id": live, "name": command.name, "arg": command.arg], profile: profile)
+        guard runtimeId == live else { return }
+        guard let result else {
+            // A built-in the dispatcher leaves to the slash runner.
+            let (output, error) = await call("slash.exec", ["session_id": live, "command": typed], profile: profile)
+            guard runtimeId == live else { return }
+            if let output { return show((output["output"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(출력 없음)", question: question) }
+            return fail(question, error ?? "명령을 실행하지 못했어요")
+        }
+        let message = (result["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch result["type"] as? String {
+        case "exec", "plugin":
+            show((result["output"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "(출력 없음)", question: question)
+        case "alias":
+            guard hops < 3, let target = (result["target"] as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")).split(separator: " ").first else {
+                return fail(question, "명령을 찾지 못했어요")
+            }
+            await run(SlashCommand(name: String(target), arg: command.arg), typed: typed, live: live, question: question, hops: hops + 1)
+        case "prefill":
+            messages.removeAll { $0.id == question || ($0.role == .assistant && $0.status == .writing && $0.text.isEmpty) }
+            if !message.isEmpty { draft = message }
+            markRunning()
+        default:
+            // A skill or send directive: its message is the prompt; the bubble keeps what was typed.
+            if message.isEmpty { show((result["output"] as? String) ?? "완료했어요", question: question) }
+            else { await submit(message, live: live, question: question) }
+        }
+    }
+
+    /// A command's output in the answer's place.
+    private func show(_ text: String, question: String) {
+        if let index = messages.firstIndex(where: { $0.id == question }) { messages[index].status = .done }
+        if let index = messages.lastIndex(where: { $0.role == .assistant && $0.status == .writing }) {
+            messages[index].text = text
+            messages[index].status = .done
+        }
+        markRunning()
     }
 
     private func fail(_ id: String, _ reason: String) {

@@ -25,6 +25,7 @@ struct ConversationView: View {
                 .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 8)
                 .background(Rose.soft).clipShape(RoundedRectangle(cornerRadius: 20)).padding(.horizontal, 20).padding(.bottom, 8)
             }
+            SlashMenu()
             input(draft: $store.draft)
         }
         .background(Rose.panel.ignoresSafeArea())
@@ -252,5 +253,78 @@ private struct ApprovalCard: View {
         }
         .padding(18).background(Rose.field).clipShape(RoundedRectangle(cornerRadius: 24))
         .overlay(RoundedRectangle(cornerRadius: 24).stroke(Rose.rose, lineWidth: 1))
+    }
+}
+
+/// Commands, plugins and skills for a `/` at the start of the field, filtered as the name is typed.
+/// The rows are read once per bot and filtered here; picking one puts `/name ` in the field.
+private struct SlashMenu: View {
+    @Environment(Store.self) private var store
+
+    var body: some View {
+        let query = SlashCommand.query(store.draft)
+        ZStack {
+            if let query {
+                menu(query)
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.98, anchor: .bottom)),
+                                            removal: .opacity))
+                    .task { store.loadSlash() }
+            }
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: query != nil)
+        .frame(maxWidth: 760).frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+    }
+
+    private func menu(_ query: String) -> some View {
+        let rows = store.slashItems.map { SlashCommand.filter($0, query) }
+        return Group {
+            if let rows {
+                if rows.isEmpty {
+                    Text("맞는 명령이 없어요").font(.app(size: 13)).foregroundStyle(Rose.muted).frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
+                                if index == 0 || rows[index - 1].group != item.group {
+                                    Text(item.group).font(.app(size: 11, weight: .bold)).foregroundStyle(Rose.chipText)
+                                        .padding(.leading, 16).padding(.top, index == 0 ? 8 : 12).padding(.bottom, 2)
+                                }
+                                Button { store.draft = item.name + " " } label: { row(item, typed: String(query.dropFirst())) }.buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.bottom, 6)
+                    }
+                    .frame(maxHeight: 264)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    ProgressView().tint(Rose.deep)
+                    Text("명령을 읽는 중").font(.app(size: 13)).foregroundStyle(Rose.muted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            }
+        }
+        .background(Rose.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(Rose.border, lineWidth: 1))
+        .shadow(color: Color(hex: 0x9A86D6).opacity(0.18), radius: 10, y: 4)
+        .padding(.bottom, 4)
+    }
+
+    private func row(_ item: SlashItem, typed: String) -> some View {
+        var name = AttributedString(item.name)
+        if !typed.isEmpty, let range = name.range(of: typed, options: .caseInsensitive), range.lowerBound > name.startIndex {
+            name[range].foregroundColor = Rose.deep
+            name[range].font = .system(size: 14, weight: .bold, design: .monospaced)
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(name).font(.system(size: 14, weight: .medium, design: .monospaced)).foregroundStyle(Rose.text).lineLimit(1)
+            if !item.description.isEmpty { Text(item.description).font(.app(size: 12.5)).foregroundStyle(Rose.muted).lineLimit(1) }
+        }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .padding(.horizontal, 16).padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 }

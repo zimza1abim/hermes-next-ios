@@ -148,3 +148,39 @@ func platformLabel(_ source: String) -> String {
     default: source.prefix(1).uppercased() + source.dropFirst()
     }
 }
+
+/// One row of the slash menu: `/name`, what it does, and the group it is listed under.
+struct SlashItem: Identifiable, Hashable {
+    var name: String
+    var description: String
+    var group: String
+    var id: String { name }
+}
+
+/// A typed `/name arg` command.
+struct SlashCommand: Equatable {
+    var name: String
+    var arg: String
+
+    private static let pattern = try! NSRegularExpression(pattern: "^/([A-Za-z0-9][A-Za-z0-9_:.-]*)(?:\\s+([\\s\\S]*))?$")
+
+    static func parse(_ text: String) -> SlashCommand? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let found = pattern.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+              let name = Range(found.range(at: 1), in: trimmed) else { return nil }
+        let arg = Range(found.range(at: 2), in: trimmed).map { String(trimmed[$0]).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        return SlashCommand(name: String(trimmed[name]), arg: arg)
+    }
+
+    /// What follows a `/` while a command name is being typed (no space yet), else nil.
+    static func query(_ draft: String) -> String? {
+        draft.hasPrefix("/") && !draft.contains(where: \.isWhitespace) ? draft : nil
+    }
+
+    /// The rows whose name or description contains what follows the `/`, in the menu's own order.
+    static func filter(_ items: [SlashItem], _ typed: String) -> [SlashItem] {
+        let query = String(typed.dropFirst()).trimmingCharacters(in: .whitespaces)
+        if query.isEmpty { return items }
+        return items.filter { $0.name.localizedCaseInsensitiveContains(query) || $0.description.localizedCaseInsensitiveContains(query) }
+    }
+}

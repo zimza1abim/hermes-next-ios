@@ -148,6 +148,40 @@ enum Parse {
         }
     }
 
+    /// The menu rows of a `commands.catalog` result, by kind: skills, plugin commands, user commands, then
+    /// the built-ins. Each kind is in alphabetical order, and each name appears once.
+    static func slashCatalog(_ result: JSON) -> [SlashItem] {
+        var described: [String: String] = [:]
+        for pair in (result["pairs"] as? [[Any]]) ?? [] {
+            guard let name = pair.first as? String, name.hasPrefix("/") else { continue }
+            if described[name] == nil { described[name] = pair.count > 1 ? (pair[1] as? String) ?? "" : "" }
+        }
+        let kinds = ["스킬", "플러그인", "내 명령", "기본 명령"]
+        var rows: [String: [SlashItem]] = [:]
+        var seen = Set<String>()
+        func add(_ name: String, _ text: String, _ kind: String) {
+            guard seen.insert(name).inserted else { return }
+            rows[kind, default: []].append(SlashItem(name: name, description: text, group: kind))
+        }
+        for key in ((result["skills"] as? JSON) ?? [:]).keys {
+            let name = key.hasPrefix("/") ? key : "/" + key
+            add(name, described[name].flatMap { $0.isEmpty ? nil : $0 } ?? "Skill", "스킬")
+        }
+        for group in ((result["categories"] as? [Any]) ?? []).compactMap({ $0 as? JSON }) {
+            let kind: String
+            switch group["name"] as? String {
+            case "Plugin commands": kind = "플러그인"
+            case "User commands": kind = "내 명령"
+            default: kind = "기본 명령"
+            }
+            for pair in (group["pairs"] as? [[Any]]) ?? [] {
+                guard let name = pair.first as? String, name.hasPrefix("/") else { continue }
+                add(name, pair.count > 1 ? (pair[1] as? String) ?? "" : "", kind)
+            }
+        }
+        return kinds.flatMap { (rows[$0] ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } }
+    }
+
     static func history(_ rows: [JSON]) -> [Message] {
         rows.enumerated().compactMap { index, row in
             let role: MessageRole
