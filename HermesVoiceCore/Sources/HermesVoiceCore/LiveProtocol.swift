@@ -26,6 +26,9 @@ public struct LiveSetup: Sendable {
     public var instructions: String = ""
     public var resumeHandle: String?
     public var languageCode: String = "ko-KR"
+    public var handOff = true
+    /// When true the tool is declared `NON_BLOCKING`, so the model can keep talking while Hermes works.
+    public var asyncTools = true
     public var sessionResumption = true
     public var contextWindowCompression = true
     public var targetTokens = 12_800
@@ -83,6 +86,24 @@ public enum LiveProtocol {
                 "silenceDurationMs": config.silenceDurationMs,
             ],
         ]
+        if config.handOff {
+            var declaration: [String: Any] = [
+                "name": askHermes,
+                "description": "내 데이터·파일·서버·일정·검색·기억이 필요한 질문을 Hermes에게 한국어로 그대로 넘긴다.",
+                "parameters": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "request": [
+                            "type": "STRING",
+                            "description": "사용자가 물어본 내용을 한국어 그대로. 요약하거나 바꾸지 않는다.",
+                        ],
+                    ],
+                    "required": ["request"],
+                ],
+            ]
+            if config.asyncTools { declaration["behavior"] = "NON_BLOCKING" }
+            payload["tools"] = [["functionDeclarations": [declaration]]]
+        }
         return json(["setup": payload])
     }
 
@@ -175,5 +196,42 @@ public enum LiveProtocol {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8) else { return "{}" }
         return text
+    }
+}
+
+/// Quota is a structured signal. A "429" or "quota" inside audio or a transcript is not one.
+public enum Quota {
+    /// True when the JSON has an `error` object whose `status` is RESOURCE_EXHAUSTED or whose `code` is 429.
+    public static func frame(_ raw: String) -> Bool {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = object["error"] as? [String: Any] else { return false }
+        if let status = error["status"] as? String,
+           status.caseInsensitiveCompare("RESOURCE_EXHAUSTED") == .orderedSame {
+            return true
+        }
+        if let code = error["code"] as? NSNumber, code.intValue == 429 { return true }
+        if let code = error["code"] as? String,
+           code == "429" || code.caseInsensitiveCompare("RESOURCE_EXHAUSTED") == .orderedSame {
+            return true
+        }
+        return false
+    }
+
+    /// Websocket close. 1011/1008 plus RESOURCE_EXHAUSTED, a close code of 429, or a quota token
+    /// in the close reason. The digits 429 inside a longer reason are not a match.
+    public static func close(code: Int, reason: String) -> Bool {
+        if code == 429 { return true }
+        let text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.range(of: "RESOURCE_EXHAUSTED", options: .caseInsensitive) != nil { return true }
+        let serverClose = code == 1011 || code == 1008 || code == 0
+        return serverClose && text.range(of: "quota", options: .caseInsensitive) != nil
+    }
+
+    /// A rejected resume handle. A quota close is not this, and a "1008" inside a sentence is not a code.
+    public static func staleHandle(code: Int, reason: String) -> Bool {
+        if close(code: code, reason: reason) { return false }
+        if reason.localizedCaseInsensitiveContains("session not found") { return true }
+        return code == 1008
     }
 }

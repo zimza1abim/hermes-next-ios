@@ -16,6 +16,7 @@ struct MenuView: View {
                     NavigationLink { InstallPane() } label: { MenuRow(icon: "arrow.down.circle", title: "플러그인 · MCP 설치", detail: "Hermes 카탈로그에서 골라 설치해요") }
                     NavigationLink { ArchivePane() } label: { MenuRow(icon: "archivebox", title: "보관한 대화", detail: "보관한 대화를 보고 다시 꺼내요") }
                     SectionTitle(title: "앱").padding(.leading, 12).padding(.top, 16).padding(.bottom, 4)
+                    NavigationLink { VoiceSettingsView() } label: { MenuRow(icon: "waveform", title: "음성 대화", detail: GeminiKey.masked().map { "키 \($0)" } ?? "Gemini 키와 목소리") }
                     NavigationLink { FontPane() } label: { MenuRow(icon: "textformat", title: "글꼴", detail: Fonts.shared.family ?? "휴대폰 기본 글꼴") }
                     NavigationLink { ServerPane() } label: { MenuRow(icon: "server.rack", title: "서버", detail: store.serverURL) }
                 }

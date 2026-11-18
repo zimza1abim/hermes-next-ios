@@ -1,4 +1,5 @@
 import SwiftUI
+import HermesVoiceCore
 
 /// One conversation: the transcript, the answer as it is written, and the input.
 struct ConversationView: View {
@@ -7,6 +8,7 @@ struct ConversationView: View {
     /// Back to the list; `slide` is false when a swipe already moved the screen away.
     let back: (_ slide: Bool) -> Void
     @FocusState private var typing: Bool
+    @State private var askKey = false
     /// How far a swipe back has moved the screen; 0 when no swipe is going on.
     @State private var swipe: CGFloat = 0
 
@@ -31,6 +33,7 @@ struct ConversationView: View {
             SlashMenu()
             input(draft: $store.draft)
         }
+        .sheet(isPresented: $askKey) { GeminiKeySheet() }
         .background(Rose.panel.ignoresSafeArea())
         .offset(x: swipe)
         .simultaneousGesture(swipeBack, including: width == .compact ? .all : .subviews)
@@ -168,15 +171,24 @@ struct ConversationView: View {
                         .frame(width: 44, height: 44).overlay(Circle().stroke(Rose.deep, lineWidth: 2))
                 }
                 .buttonStyle(.plain).accessibilityLabel("답변 중지")
+            } else if !ready {
+                Button {
+                    typing = false
+                    if GeminiKey.load() == nil { askKey = true } else { startCall() }
+                } label: {
+                    Image(systemName: "waveform").font(.app(size: 17, weight: .semibold)).foregroundStyle(Rose.deep)
+                        .frame(width: 44, height: 44).background(Color(hex: 0xF3D5E3)).clipShape(Circle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("음성 대화")
             } else {
                 Button {
                     typing = false
                     store.send()
                 } label: {
-                    Image(systemName: "arrow.up").font(.app(size: 17, weight: .bold)).foregroundStyle(ready ? Color.white : Rose.deep)
-                        .frame(width: 44, height: 44).background(ready ? Rose.deep : Color(hex: 0xF3D5E3)).clipShape(Circle())
+                    Image(systemName: "arrow.up").font(.app(size: 17, weight: .bold)).foregroundStyle(Color.white)
+                        .frame(width: 44, height: 44).background(Rose.deep).clipShape(Circle())
                 }
-                .buttonStyle(.plain).disabled(!ready).accessibilityLabel("보내기")
+                .buttonStyle(.plain).accessibilityLabel("보내기")
             }
         }
         .padding(6)
@@ -184,6 +196,11 @@ struct ConversationView: View {
         .overlay(RoundedRectangle(cornerRadius: 28).stroke(typing ? Rose.rose : Rose.border, lineWidth: typing ? 1.5 : 1))
         .frame(maxWidth: 760).frame(maxWidth: .infinity)
         .padding(.horizontal, 20).padding(.bottom, 12).padding(.top, 6)
+    }
+
+    private func startCall() {
+        let recent = store.messages.suffix(12).map { CallContext.Line(mine: $0.role == .user, text: $0.text) }
+        VoiceCenter.shared.open(store: store, context: CallContext.block(Array(recent)))
     }
 }
 

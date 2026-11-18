@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Observation
 import UIKit
+import HermesVoiceCore
 
 /// Everything the screens show, and the one gateway socket behind it. Main actor only.
 @MainActor
@@ -36,6 +37,13 @@ final class Store {
     var messages: [Message] = []
     var opening = false
     var approvals: [ApprovalRequest] = []
+    /// A live call is using the microphone. The gateway stays up while the screen is off so a hand-off can finish.
+    var voiceCallActive = false {
+        didSet {
+            if oldValue, !voiceCallActive, !active { setActive(false) }
+        }
+    }
+    private var voiceWaiters: [String: (String?, String?) -> Void] = [:]
     var draft = UserDefaults.standard.string(forKey: "draft") ?? ""
     /// The slash menu of `slashFor`'s bot; nil until it was read.
     var slashItems: [SlashItem]?
@@ -119,6 +127,7 @@ final class Store {
         }
         // One assertion at a time; iOS needs the expired one ended before its handler returns.
         endBackground()
+        if voiceCallActive { return }
         background = UIApplication.shared.beginBackgroundTask(withName: "socket") { [weak self] in
             MainActor.assumeIsolated {
                 self?.drop(to: .idle)
@@ -336,6 +345,14 @@ final class Store {
             case "error": messages[index].status = .failed(payload.text("error") ?? payload.text("failure_reason") ?? "답변을 받지 못했어요")
             case "interrupted": messages[index].status = .stopped
             default: messages[index].status = .done
+            }
+            if let waiter = voiceWaiters.removeValue(forKey: messages[index].id) {
+                switch messages[index].status {
+                case .done: waiter(messages[index].text, nil)
+                case .stopped: waiter(nil, "사용자가 멈췄어요")
+                case .failed(let reason): waiter(nil, reason)
+                default: waiter(messages[index].text, nil)
+                }
             }
             approvals = []
             rememberLastLine()
@@ -603,9 +620,10 @@ final class Store {
         return live
     }
 
-    private func submit(_ text: String, live: String, question: String) async {
+    private func submit(_ text: String, live: String, question: String, surface: String? = nil, submissionId: String? = nil) async {
         var params: JSON = ["session_id": live, "text": text]
-        if authority { params["submission_id"] = UUID().uuidString }
+        if let surface { params["surface"] = surface }
+        if authority { params["submission_id"] = submissionId ?? UUID().uuidString }
         let (result, error) = await call("prompt.submit", params, profile: profile)
         guard runtimeId == live else { return }
         if result == nil { return fail(question, error ?? "보내지 못했어요") }
@@ -658,6 +676,73 @@ final class Store {
         // The empty answer that waited for it goes.
         messages.removeAll { $0.role == .assistant && $0.status == .writing && $0.text.isEmpty }
         markRunning()
+    }
+
+    /// One question asked out loud. The answer is the turn Hermes spoke, or the reason it could not.
+    func askVoice(question: String, submissionId: String) async -> VoiceTurn {
+        let questionId = "voice-q-\(submissionId)"
+        let answerId = "voice-a-\(submissionId)"
+        messages.append(Message(id: questionId, role: .user, text: question, status: .sending))
+        messages.append(Message(id: answerId, role: .assistant, text: "", status: .writing))
+        markRunning()
+        let token = chatToken
+        guard let live = await session(token, question: questionId) else {
+            return VoiceTurn(text: nil, error: "대화를 열지 못했어요")
+        }
+        var params: JSON = ["session_id": live, "text": question, "surface": HermesHandOff.surface]
+        if authority { params["submission_id"] = submissionId }
+        let (result, error) = await call("prompt.submit", params, profile: profile)
+        guard runtimeId == live else { return VoiceTurn(text: nil, error: "대화가 바뀌었어요") }
+        if result == nil {
+            fail(questionId, error ?? "보내지 못했어요")
+            return VoiceTurn(text: nil, error: error ?? "보내지 못했어요")
+        }
+        if let index = messages.firstIndex(where: { $0.id == questionId }) { messages[index].status = .done }
+        return await withCheckedContinuation { continuation in
+            voiceWaiters[answerId] = { text, error in
+                continuation.resume(returning: VoiceTurn(text: error == nil ? text : nil, error: error))
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(100))
+                if let waiter = self.voiceWaiters.removeValue(forKey: answerId) {
+                    waiter(nil, "시간이 다 됐어요")
+                }
+            }
+        }
+    }
+
+    /// A spoken line, shown in the chat while the call is going. Removed when the call record replaces it.
+    func appendVoiceLine(me: Bool, text: String) {
+        messages.append(Message(id: "voice-echo-\(UUID().uuidString)", role: me ? .user : .assistant, text: text, status: .done))
+    }
+
+    func clearVoiceEcho() {
+        messages.removeAll { $0.id.hasPrefix("voice-echo-") }
+    }
+
+    /// The call, as one turn the server stores. The title comes from what was said.
+    func recordVoiceCall(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        clearVoiceEcho()
+        guard !trimmed.isEmpty else { return }
+        let questionId = UUID().uuidString
+        messages.append(Message(id: questionId, role: .user, text: trimmed, status: .sending))
+        messages.append(Message(id: UUID().uuidString, role: .assistant, text: "", status: .writing))
+        markRunning()
+        let token = chatToken
+        Task {
+            guard let live = await session(token, question: questionId) else { return }
+            await submit(trimmed, live: live, question: questionId, surface: HermesHandOff.surface)
+        }
+    }
+
+    /// The bot's SOUL.md, when the server has one. Empty is a normal answer.
+    func soulText() async -> String {
+        let name = profile ?? openBot?.name ?? ""
+        var params: JSON = [:]
+        if !name.isEmpty { params["name"] = name }
+        let (result, _) = await call("profiles.describe", params, profile: profile)
+        return result?.text("soul") ?? result?.text("soul_md") ?? ""
     }
 
     func stop() {

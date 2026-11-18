@@ -198,5 +198,9 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $menu) { MenuView() }
+        .overlay { CallOverlay() }
+        .onChange(of: VoiceCenter.shared.mode) { _, mode in
+            if mode == .full { menu = false }
+        }
     }
 }

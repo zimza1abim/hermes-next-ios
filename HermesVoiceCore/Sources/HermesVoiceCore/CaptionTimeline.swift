@@ -6,6 +6,13 @@ public struct InterruptMark: Equatable, Sendable {
     public var text: String
     public var revealedChars: Int
     public var atMs: Double
+
+    public init(seq: Int, text: String, revealedChars: Int, atMs: Double) {
+        self.seq = seq
+        self.text = text
+        self.revealedChars = revealedChars
+        self.atMs = atMs
+    }
 }
 
 /// 봇 한 턴의 자막 글자 ↔ 오디오 시각.
