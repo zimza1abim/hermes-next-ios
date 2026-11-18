@@ -812,3 +812,49 @@ final class Store {
         await refreshCatalogs()
     }
 }
+
+// MARK: Images
+
+/// Pictures already loaded, by their source.
+private let pictures: NSCache<NSString, UIImage> = {
+    let cache = NSCache<NSString, UIImage>()
+    cache.totalCostLimit = 120 * 1024 * 1024
+    return cache
+}()
+
+extension Store {
+    /// The image a message names: a `data:` URL, a web address, or a file on the Hermes machine. Nil when
+    /// it cannot be read. One source is fetched once; later calls take the kept copy.
+    func image(_ source: String) async -> UIImage? {
+        if let kept = pictures.object(forKey: source as NSString) { return kept }
+        let data = await imageData(source)
+        let picture = await Task.detached(priority: .userInitiated) { data.flatMap { Media.picture($0) } }.value
+        if let picture {
+            pictures.setObject(picture, forKey: source as NSString, cost: Int(picture.size.width * picture.size.height * picture.scale * picture.scale * 4))
+        }
+        return picture
+    }
+
+    /// The image's own bytes, as the server keeps them, for saving at full size.
+    func imageBytes(_ source: String) async -> Data? { await imageData(source) }
+
+    private func imageData(_ source: String) async -> Data? {
+        if source.hasPrefix("data:") { return Media.decodeDataURL(source) }
+        guard let endpoint = Endpoint(serverURL) else { return nil }
+        if source.hasPrefix("http://") || source.hasPrefix("https://") {
+            if let url = URL(string: source), let (data, reply) = try? await URLSession.shared.data(from: url),
+               (reply as? HTTPURLResponse)?.statusCode == 200, UIImage(data: data) != nil { return data }
+            // A phone that cannot reach the image host asks the Hermes machine that made the image.
+            let proxied = await Server.shared.call(endpoint, "GET", "/api/media/proxy?url=" + source.urlEncoded)
+            return ((proxied as? JSON)?.text("dataUrl") ?? (proxied as? JSON)?.text("data_url")).flatMap(Media.decodeDataURL)
+        }
+        // A file on the Hermes machine, read with the sign-in like every other request.
+        var path = source
+        if path.hasPrefix("file://") { path = URL(string: path)?.path ?? String(path.dropFirst(7)) }
+        let scope = profile.map { "&profile=" + $0.urlEncoded } ?? ""
+        if let reply = await Server.shared.call(endpoint, "GET", "/api/fs/read-data-url?path=" + path.urlEncoded + scope) as? JSON,
+           let data = reply.text("dataUrl").flatMap(Media.decodeDataURL) { return data }
+        let media = await Server.shared.call(endpoint, "GET", "/api/media?path=" + path.urlEncoded) as? JSON
+        return media?.text("data_url").flatMap(Media.decodeDataURL)
+    }
+}

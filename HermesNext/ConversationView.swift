@@ -41,14 +41,14 @@ struct ConversationView: View {
         }
     }
 
-    /// On a phone, a swipe to the right that starts on the left half of the screen goes back to the list. The
-    /// screen follows the finger and settles back when the swipe is short. A mostly vertical drag (scrolling)
-    /// or one starting on the right half (a wide code block or table) is left alone.
+    /// On a phone, a swipe to the right that starts at the screen's left edge goes back to the list, as the
+    /// system's own edge swipe does. The screen follows the finger and settles back when the swipe is short.
+    /// A drag that starts anywhere else is left alone: selecting text or scrolling a wide code block or table
+    /// no longer moves the screen.
     private var swipeBack: some Gesture {
         DragGesture(minimumDistance: 18, coordinateSpace: .global)
             .onChanged { drag in
-                let screen = UIScreen.main.bounds.width
-                guard drag.startLocation.x < screen / 2, drag.translation.width > 0,
+                guard drag.startLocation.x < Self.edge, drag.translation.width > 0,
                       abs(drag.translation.width) > abs(drag.translation.height) * 1.5 else { return }
                 swipe = drag.translation.width
             }
@@ -67,6 +67,9 @@ struct ConversationView: View {
                 }
             }
     }
+
+    /// How far from the left edge a swipe back may start, in points.
+    private static let edge: CGFloat = 24
 
     private var header: some View {
         HStack(spacing: 9) {
@@ -198,13 +201,15 @@ private struct MessageView: View, Equatable {
     var body: some View {
         switch message.role {
         case .user:
+            let media = Media.extract(message.text)
             VStack(alignment: .trailing, spacing: 5) {
+                if !media.sources.isEmpty { MediaStrip(sources: media.sources, trailing: true) }
                 // A long question is cut and opens in full on a tap.
-                Text(message.text).font(.app(size: 15.5)).lineSpacing(5).foregroundStyle(Rose.text).lineLimit(open ? nil : 12)
+                if !media.text.isEmpty { Text(media.text).font(.app(size: 15.5)).lineSpacing(5).foregroundStyle(Rose.text).lineLimit(open ? nil : 12)
                     .padding(.horizontal, 15).padding(.vertical, 11)
                     .background(Rose.bubble)
                     .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20))
-                    .onTapGesture { open.toggle() }
+                    .onTapGesture { open.toggle() } }
                 switch message.status {
                 case .sending: Text("보내는 중").font(.app(size: 10.5)).foregroundStyle(Rose.muted)
                 case .failed(let reason): Text(reason).font(.app(size: 12)).foregroundStyle(Rose.deep)
@@ -223,7 +228,9 @@ private struct MessageView: View, Equatable {
                 if message.text.isEmpty {
                     if message.status == .writing { ThinkingDots() } else { Text("답변이 비어 있어요").font(.app(size: 13)).foregroundStyle(Rose.muted) }
                 } else {
-                    MarkdownView(text: message.text)
+                    let media = Media.extract(message.text)
+                    if !media.text.isEmpty { MarkdownView(text: media.text) }
+                    if !media.sources.isEmpty { MediaStrip(sources: media.sources) }
                 }
                 switch message.status {
                 case .stopped: Text("멈췄어요").font(.app(size: 13)).foregroundStyle(Rose.muted)
