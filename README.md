@@ -105,8 +105,12 @@ app alongside Hermes Agent when a server release changes gateway behaviour.
 - Authentication cookies are retained in the iOS Keychain. The app refreshes
   its stored copy after server responses so rotated sign-in cookies survive an
   app restart.
-- The saved server address, draft, recent preview lines, selected font, and
-  imported fonts live in the app's own storage. Bot images are cached locally.
+- The saved server address, draft, recent preview lines, selected font, voice
+  settings, and imported fonts live in the app's own storage. Bot images are
+  cached locally. A Gemini API key, used only for the live voice call, is
+  stored in the Keychain. Voice audio is sent to Google when a call is placed.
+- The microphone is used only during a voice call. Background audio keeps that
+  call, and the Hermes hand-off inside it, alive when the screen locks.
 - Conversation content is sent to and retained by the Hermes server you choose;
   secure that server and its network route accordingly.
 
@@ -140,6 +144,11 @@ distribution certificate. Sideloading tools can re-sign an IPA with their own
 certificate; their device and account limits are determined by Apple and the
 tool you choose.
 
+GitHub Actions builds an unsigned Release IPA on a macOS runner
+(`.github/workflows/ios-ipa.yml`). The artifact is `HermesNext-unsigned`
+(`HermesNext-unsigned.ipa`). It is not signed: install it with a free personal
+team in Xcode, or re-sign it with your own certificate. No secrets are used.
+
 ## Project map
 
 | Path | Responsibility |
@@ -152,6 +161,8 @@ tool you choose.
 | `MenuView.swift` | Cron, capabilities, catalog installs, archives, fonts, and server settings |
 | `Markdown.swift`, `MarkdownView.swift` | Markdown parsing and rendering |
 | `Fonts.swift`, `Theme.swift` | Font registration, colour palette, and shared controls |
+| `Voice/` | Live call screen, Metal aura, audio, Gemini socket, and voice settings |
+| `HermesVoiceCore/` | Call state machine, protocol, captions, and settings codec (Swift package) |
 
 ## Credits and license
 

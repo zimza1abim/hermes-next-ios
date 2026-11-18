@@ -17,6 +17,11 @@ public enum HandOffFailure: Equatable, Sendable {
 public struct VoiceTurn: Equatable, Sendable {
     public var text: String?
     public var error: String?
+
+    public init(text: String?, error: String?) {
+        self.text = text
+        self.error = error
+    }
 }
 
 /// Turns a live conversation's question into a Hermes turn, and a Hermes answer into something worth

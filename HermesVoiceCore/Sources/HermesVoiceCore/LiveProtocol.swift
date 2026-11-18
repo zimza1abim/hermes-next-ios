@@ -26,6 +26,9 @@ public struct LiveSetup: Sendable {
     public var instructions: String = ""
     public var resumeHandle: String?
     public var languageCode: String = "ko-KR"
+    public var handOff = true
+    /// When true the tool is declared `NON_BLOCKING`, so the model can keep talking while Hermes works.
+    public var asyncTools = true
     public var sessionResumption = true
     public var contextWindowCompression = true
     public var targetTokens = 12_800
@@ -83,6 +86,24 @@ public enum LiveProtocol {
                 "silenceDurationMs": config.silenceDurationMs,
             ],
         ]
+        if config.handOff {
+            var declaration: [String: Any] = [
+                "name": askHermes,
+                "description": "내 데이터·파일·서버·일정·검색·기억이 필요한 질문을 Hermes에게 한국어로 그대로 넘긴다.",
+                "parameters": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "request": [
+                            "type": "STRING",
+                            "description": "사용자가 물어본 내용을 한국어 그대로. 요약하거나 바꾸지 않는다.",
+                        ],
+                    ],
+                    "required": ["request"],
+                ],
+            ]
+            if config.asyncTools { declaration["behavior"] = "NON_BLOCKING" }
+            payload["tools"] = [["functionDeclarations": [declaration]]]
+        }
         return json(["setup": payload])
     }
 
