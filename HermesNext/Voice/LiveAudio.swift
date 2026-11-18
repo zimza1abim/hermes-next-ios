@@ -4,23 +4,28 @@ import HermesVoiceCore
 
 /// Microphone at 16 kHz and playback at 24 kHz. Voice-processing mode is the echo canceller.
 /// Barge-in stops the player and drops every buffer that has not been heard yet.
+///
+/// The aura's display link must not touch the player. It reads `playedFrames` and `playbackLevel`,
+/// which are a cache written on the main run loop only while the player is attached and the engine is running.
 final class LiveAudio {
     private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private let pitch = AVAudioUnitTimePitch()
+    private let transport = EnginePlayback()
     private let meter = PlaybackMeter()
     private let lock = NSLock()
     private var micLevel: Float = 0
+    private var cachedPlayed: Int64 = 0
+    private var cachedLevel: Float = 0
     private var converter: AVAudioConverter?
     private var targetFormat: AVAudioFormat?
     private var pending = Data()
     private var micOn = false
     private var prepared = false
-    private var headOffset: AVAudioFramePosition = 0
+    private var headOffset: Int64 = 0
     private var playGeneration = 0
     private var outstanding = 0
     private var speakerOn = true
     private var observers: [NSObjectProtocol] = []
+    private var clock: Timer?
 
     var onChunk: ((Data) -> Void)?
     var onFocusLost: ((Bool) -> Void)?
@@ -28,35 +33,52 @@ final class LiveAudio {
 
     private let playFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false)
 
-    func prepare(speaker: Bool) -> Bool {
-        if prepared { route(speaker: speaker); return true }
+    static var microphoneGranted: Bool {
+        AVAudioApplication.shared.recordPermission == .granted
+    }
+
+    enum PrepareResult { case ready, denied, failed }
+
+    func prepare(speaker: Bool) -> PrepareResult {
+        if prepared { route(speaker: speaker); return .ready }
+        guard Self.microphoneGranted else { return .denied }
         speakerOn = speaker
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP, .duckOthers])
             try session.setActive(true)
         } catch {
-            return false
+            return .failed
         }
         route(speaker: speaker)
-        guard let playFormat else { return false }
-        engine.attach(player)
-        engine.attach(pitch)
-        engine.connect(player, to: pitch, format: playFormat)
-        engine.connect(pitch, to: engine.mainMixerNode, format: playFormat)
-        pitch.pitch = 0
+        guard let playFormat else { return .failed }
+        // Voice processing before any connection and before engine.prepare. The input node
+        // exists once it is touched; the player is still unattached, so nothing reads its clock.
         try? engine.inputNode.setVoiceProcessingEnabled(true)
+        engine.attach(transport.player)
+        engine.attach(transport.pitch)
+        engine.connect(transport.player, to: transport.pitch, format: playFormat)
+        engine.connect(transport.pitch, to: engine.mainMixerNode, format: playFormat)
         engine.prepare()
-        do { try engine.start() } catch { return false }
-        player.play()
+        do { try engine.start() } catch {
+            abandonGraph()
+            return .failed
+        }
+        guard transport.ready(prepared: true, running: engine.isRunning) else {
+            abandonGraph()
+            return .failed
+        }
         prepared = true
+        transport.setPitch(0, prepared: true, running: engine.isRunning)
+        transport.play(prepared: true, running: engine.isRunning)
+        startClock()
         UIDevice.current.isProximityMonitoringEnabled = true
         observe()
-        return true
+        return .ready
     }
 
     func setSpeed(_ speed: Float) {
-        pitch.rate = min(max(speed, 0.5), 2)
+        transport.setRate(speed, prepared: prepared, running: engine.isRunning)
     }
 
     func route(speaker: Bool) {
@@ -71,7 +93,10 @@ final class LiveAudio {
 
     func startMicrophone() -> Bool {
         if micOn { return true }
-        guard prepared || prepare(speaker: speakerOn) else { return false }
+        guard Self.microphoneGranted else { return false }
+        if !prepared {
+            guard prepare(speaker: speakerOn) == .ready else { return false }
+        }
         let input = engine.inputNode
         let hardware = input.outputFormat(forBus: 0)
         guard hardware.sampleRate > 0, hardware.channelCount > 0,
@@ -102,7 +127,7 @@ final class LiveAudio {
     }
 
     func play(_ pcm: Data) {
-        guard prepared, let playFormat, pcm.count >= 2,
+        guard nodeReady, let playFormat, pcm.count >= 2,
               let buffer = AVAudioPCMBuffer(pcmFormat: playFormat, frameCapacity: AVAudioFrameCount(pcm.count / 2)) else { return }
         buffer.frameLength = AVAudioFrameCount(pcm.count / 2)
         pcm.withUnsafeBytes { raw in
@@ -111,45 +136,45 @@ final class LiveAudio {
                 dest[index] = Float(source[index]) / Float(Int16.max)
             }
         }
-        meter.append(pcm)
         lock.lock()
         let generation = playGeneration
         outstanding += 1
         lock.unlock()
-        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+        let scheduled = transport.schedule(buffer, prepared: prepared, running: engine.isRunning) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             if self.playGeneration == generation { self.outstanding = max(0, self.outstanding - 1) }
             self.lock.unlock()
         }
-        if !player.isPlaying { player.play() }
+        guard scheduled else {
+            lock.lock()
+            if playGeneration == generation { outstanding = max(0, outstanding - 1) }
+            lock.unlock()
+            return
+        }
+        meter.append(pcm)
+        if !transport.isPlaying(prepared: prepared, running: engine.isRunning) {
+            transport.play(prepared: prepared, running: engine.isRunning)
+        }
     }
 
     /// Interrupt: drop the queue and whatever the player has not rendered.
     func stopPlayback() {
-        lock.lock()
-        playGeneration += 1
-        outstanding = 0
-        lock.unlock()
-        player.stop()
-        meter.flush()
-        if engine.isRunning { player.play() }
-        if let nodeTime = player.lastRenderTime, let playerTime = player.playerTime(forNodeTime: nodeTime) {
-            headOffset = playerTime.sampleTime
-        } else {
-            headOffset = 0
-        }
+        halt(restart: true)
     }
 
+    /// What the speaker has rendered. The display link reads this; it never asks the node.
     func playedFrames() -> Int64 {
-        guard let nodeTime = player.lastRenderTime, let playerTime = player.playerTime(forNodeTime: nodeTime) else { return 0 }
-        let played = playerTime.sampleTime - headOffset
-        return min(max(played, 0), meter.enqueued)
+        lock.lock(); defer { lock.unlock() }
+        return cachedPlayed
     }
 
     func enqueuedFrames() -> Int64 { meter.enqueued }
 
-    func playbackLevel() -> Float { meter.level(playedFrames: playedFrames()) }
+    func playbackLevel() -> Float {
+        lock.lock(); defer { lock.unlock() }
+        return cachedLevel
+    }
 
     func amplitude() -> Float {
         lock.lock(); defer { lock.unlock() }
@@ -163,18 +188,84 @@ final class LiveAudio {
 
     func release() {
         stopMicrophone()
-        stopPlayback()
-        player.stop()
-        engine.stop()
-        if prepared {
-            engine.detach(player)
-            engine.detach(pitch)
+        halt(restart: false)
+        clock?.invalidate()
+        clock = nil
+        if nodeReady {
+            transport.stopPlayback(prepared: prepared, running: engine.isRunning)
         }
+        engine.stop()
+        if transport.player.engine != nil { engine.detach(transport.player) }
+        if transport.pitch.engine != nil { engine.detach(transport.pitch) }
         prepared = false
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         UIDevice.current.isProximityMonitoringEnabled = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private var nodeReady: Bool {
+        transport.ready(prepared: prepared, running: engine.isRunning)
+    }
+
+    private func halt(restart: Bool) {
+        lock.lock()
+        playGeneration += 1
+        outstanding = 0
+        cachedPlayed = 0
+        cachedLevel = 0
+        let offset = headOffset
+        lock.unlock()
+        meter.flush()
+        let running = engine.isRunning
+        guard transport.ready(prepared: prepared, running: running) else {
+            lock.lock(); headOffset = 0; lock.unlock()
+            return
+        }
+        transport.stopPlayback(prepared: prepared, running: running)
+        guard restart else {
+            lock.lock(); headOffset = 0; lock.unlock()
+            return
+        }
+        let stillRunning = engine.isRunning
+        transport.play(prepared: prepared, running: stillRunning)
+        let sample = transport.sampleTime(prepared: prepared, running: stillRunning) ?? offset
+        lock.lock()
+        headOffset = sample
+        lock.unlock()
+    }
+
+    /// Writes the cache. This is the only place that reads the player's clock, and only while it has an engine.
+    private func publishClock() {
+        let running = engine.isRunning
+        guard transport.ready(prepared: prepared, running: running) else { return }
+        lock.lock()
+        let offset = headOffset
+        lock.unlock()
+        let played = transport.playedFrames(prepared: prepared, running: running, headOffset: offset, enqueued: meter.enqueued)
+        let level = meter.level(playedFrames: played)
+        lock.lock()
+        cachedPlayed = played
+        cachedLevel = level
+        lock.unlock()
+    }
+
+    private func startClock() {
+        clock?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.publishClock()
+        }
+        clock = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func abandonGraph() {
+        clock?.invalidate()
+        clock = nil
+        engine.stop()
+        if transport.player.engine != nil { engine.detach(transport.player) }
+        if transport.pitch.engine != nil { engine.detach(transport.pitch) }
+        prepared = false
     }
 
     private func consume(_ buffer: AVAudioPCMBuffer) {
@@ -224,15 +315,15 @@ final class LiveAudio {
         guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         if type == .began {
-            stopPlayback()
+            halt(restart: false)
             stopMicrophone()
             onFocusLost?(false)
             return
         }
         let options = AVAudioSession.InterruptionOptions(rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
-        guard options.contains(.shouldResume) else { return }
+        guard options.contains(.shouldResume), prepared, transport.player.engine != nil else { return }
         try? engine.start()
-        player.play()
+        transport.play(prepared: prepared, running: engine.isRunning)
         onFocusRegained?()
     }
 }

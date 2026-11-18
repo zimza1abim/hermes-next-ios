@@ -48,6 +48,7 @@ final class LiveController {
 
     func liveBotText() -> String { captions.currentText() }
 
+    /// Levels for one aura frame. Cached audio only: the display link must not touch the player.
     func signalSnapshot() -> (mic: Float, playback: Float, revealed: Int) {
         let mic = state.muted ? 0 : audio.amplitude()
         return (mic, audio.playbackLevel(), captions.revealedChars(playedFrames: audio.playedFrames()))
@@ -213,7 +214,13 @@ final class LiveController {
             dispatch(.fatal(.keyMissing, notice: "Gemini 키가 없어요."))
             return
         }
-        guard audio.prepare(speaker: state.speakerOn) else {
+        switch audio.prepare(speaker: state.speakerOn) {
+        case .ready:
+            break
+        case .denied:
+            dispatch(.fatal(.error, notice: "마이크 권한을 허용해야 통화할 수 있어요. 설정에서 허용해 주세요."))
+            return
+        case .failed:
             dispatch(.fatal(.error, notice: "오디오를 열지 못했어요."))
             return
         }
