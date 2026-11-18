@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import HermesVoiceCore
 
 /// The Gemini key, in the Keychain. The settings screen only ever shows the last four characters.
 enum GeminiKey {

@@ -75,7 +75,8 @@ struct VoiceSettingsView: View {
     }
 
     private var modelRow: some View {
-        Picker("모델", selection: $settings.model) {
+        let selection: Binding<LiveModel> = $settings.model
+        return Picker("모델", selection: selection) {
             ForEach(LiveModel.allCases, id: \.self) { model in
                 Text(model.label).tag(model)
             }
@@ -123,7 +124,8 @@ struct VoiceSettingsView: View {
 
     private func personaBlock(persona: Binding<Persona>) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Picker("성격", selection: persona.preset) {
+            let selection: Binding<PersonaPreset> = persona.preset
+            Picker("성격", selection: selection) {
                 ForEach(PersonaPreset.allCases, id: \.self) { preset in
                     Text(preset.label).tag(preset)
                 }
@@ -145,7 +147,8 @@ struct VoiceSettingsView: View {
 
     private var languageRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("언어", selection: $settings.language) {
+            let selection: Binding<VoiceLanguage> = $settings.language
+            Picker("언어", selection: selection) {
                 ForEach(VoiceLanguage.allCases, id: \.self) { language in
                     Text(language.label).tag(language)
                 }

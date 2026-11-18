@@ -198,32 +198,34 @@ struct FallbackAura: View {
     @State private var engine = CallFrameEngine()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: halfRate ? 1.0 / 30 : 1.0 / 60, paused: false)) { timeline in
+        let interval = halfRate ? 1.0 / 30 : 1.0 / 60
+        TimelineView(.animation(minimumInterval: interval, paused: false)) { _ in
             Canvas { context, size in
-                let sample = signals()
-                let dt = 1000 / (halfRate ? 30 : 60)
-                _ = engine.step(dtMs: Float(dt), micRMS: sample.mic, playbackRMS: sample.playback, revealed: sample.revealed, animator: animator, calm: calm, detail: detail, skipEveryOther: false, heightMap: heightMap)
-                let u = engine.uniforms
-                let edge = size.height * CGFloat(1 - u.height - 0.10 * u.swell)
-                context.fill(Path(CGRect(origin: .zero, size: size)), with: .linearGradient(
-                    Gradient(colors: [CallTokens.base, CallTokens.baseDeep]),
-                    startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)
-                ))
-                let wash = GraphicsContext.Shading.linearGradient(
-                    Gradient(colors: [
-                        Color.clear,
-                        Color(rgb: palette.b).opacity(0.55 * Double(u.brightness)),
-                        Color(rgb: palette.a).opacity(0.75 * Double(u.brightness)),
-                    ]),
-                    startPoint: CGPoint(x: 0, y: edge),
-                    endPoint: CGPoint(x: 0, y: size.height)
-                )
-                context.fill(Path(CGRect(x: 0, y: edge, width: size.width, height: size.height - edge)), with: wash)
-                let crest = Color(rgb: palette.c).opacity(Double((0.35 + 0.25 * u.swell + 0.5 * u.flash) * u.brightness))
-                context.fill(Path(CGRect(x: 0, y: edge - 8, width: size.width, height: 16)), with: .color(crest))
+                paint(&context, size: size)
             }
             .onChange(of: engine.revealedChars) { _, value in onRevealed(value) }
         }
+    }
+
+    private func paint(_ context: inout GraphicsContext, size: CGSize) {
+        let sample = signals()
+        let dt = Float(halfRate ? 33 : 16)
+        _ = engine.step(dtMs: dt, micRMS: sample.mic, playbackRMS: sample.playback, revealed: sample.revealed, animator: animator, calm: calm, detail: detail, skipEveryOther: false, heightMap: heightMap)
+        let uniforms = engine.uniforms
+        let edge = size.height * CGFloat(1 - uniforms.height - 0.10 * uniforms.swell)
+        let ground = Gradient(colors: [CallTokens.base, CallTokens.baseDeep])
+        context.fill(Path(CGRect(origin: .zero, size: size)), with: .linearGradient(ground, startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
+        let bright = Double(uniforms.brightness)
+        let wash = Gradient(colors: [
+            Color.clear,
+            Color(rgb: palette.b).opacity(0.55 * bright),
+            Color(rgb: palette.a).opacity(0.75 * bright),
+        ])
+        let band = CGRect(x: 0, y: edge, width: size.width, height: size.height - edge)
+        context.fill(Path(band), with: .linearGradient(wash, startPoint: CGPoint(x: 0, y: edge), endPoint: CGPoint(x: 0, y: size.height)))
+        let crestAmount = (0.35 + 0.25 * Double(uniforms.swell) + 0.5 * Double(uniforms.flash)) * bright
+        let crest = Color(rgb: palette.c).opacity(crestAmount)
+        context.fill(Path(CGRect(x: 0, y: edge - 8, width: size.width, height: 16)), with: .color(crest))
     }
 }
 

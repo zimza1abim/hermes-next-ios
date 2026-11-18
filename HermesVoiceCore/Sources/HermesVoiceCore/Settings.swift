@@ -2,7 +2,7 @@ import Foundation
 
 /// The voices the app offers — the ones the Android sweep measured changing the audio.
 /// An unknown name still returns audio, so the list is fixed rather than free text.
-public enum Voice: String, CaseIterable, Sendable {
+public enum Voice: String, CaseIterable, Hashable, Sendable {
     case achernar = "Achernar", laomedeia = "Laomedeia", despina = "Despina", autonoe = "Autonoe"
     case sadachbia = "Sadachbia", leda = "Leda", sulafat = "Sulafat", umbriel = "Umbriel"
     case callirrhoe = "Callirrhoe", kore = "Kore", zephyr = "Zephyr", vindemiatrix = "Vindemiatrix"
@@ -16,7 +16,7 @@ public enum Voice: String, CaseIterable, Sendable {
     public static let verified: [Voice] = [.kore, .zephyr, .leda, .aoede, .charon, .puck]
 }
 
-public enum LiveModel: String, CaseIterable, Sendable {
+public enum LiveModel: String, CaseIterable, Hashable, Sendable {
     case gemini38 = "gemini-3.8-live"
     case gemini31Flash = "gemini-3.1-flash-live-preview"
 
@@ -24,7 +24,7 @@ public enum LiveModel: String, CaseIterable, Sendable {
 }
 
 /// The languages a call may speak; `.custom` carries a free BCP-47 code.
-public enum VoiceLanguage: String, CaseIterable, Sendable {
+public enum VoiceLanguage: String, CaseIterable, Hashable, Sendable {
     case korean, english, japanese, spanish, french, german, custom
 
     public var code: String {
@@ -80,7 +80,7 @@ public enum VoiceLanguage: String, CaseIterable, Sendable {
     }
 }
 
-public enum PersonaPreset: String, CaseIterable, Sendable {
+public enum PersonaPreset: String, CaseIterable, Hashable, Sendable {
     case warm, calm, friend, custom
     public var label: String {
         switch self {
