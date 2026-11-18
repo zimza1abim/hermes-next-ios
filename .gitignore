@@ -9,3 +9,7 @@ xcuserdata/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 .DS_Store
+
+# SwiftPM build artifacts (127MB of absolute paths)
+.build/
+.swiftpm/
