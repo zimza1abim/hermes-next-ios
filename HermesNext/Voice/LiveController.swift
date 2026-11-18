@@ -230,8 +230,8 @@ final class LiveController {
         socket.onText = { [weak self] text in
             Task { @MainActor in self?.handle(text) }
         }
-        socket.onClosed = { [weak self] reason in
-            Task { @MainActor in self?.socketClosed(reason) }
+        socket.onClosed = { [weak self] code, reason, detail in
+            Task { @MainActor in self?.socketClosed(code: code, reason: reason, detail: detail) }
         }
         self.socket = socket
         refreshSend()
@@ -244,12 +244,13 @@ final class LiveController {
 
     private func handle(_ raw: String) {
         if cleanedUp { return }
-        let lowered = raw.lowercased()
-        if lowered.contains("resource_exhausted") || raw.contains("429") || lowered.contains("quota") {
+        if Quota.frame(raw) {
+            VoiceDiagnostics.record("quota frame")
             dispatch(.fatal(.quota, notice: "오늘 무료 한도를 다 썼어요."))
             return
         }
-        for event in LiveProtocol.parse(raw) {
+        for rawEvent in LiveProtocol.parse(raw) {
+            let event = aligned(rawEvent)
             switch event {
             case .interrupted:
                 let snap = captions.snapshot(playedFrames: audio.playedFrames())
@@ -279,16 +280,28 @@ final class LiveController {
         }
     }
 
-    private func socketClosed(_ reason: String?) {
+    /// Playback and the caption clock share 24 kHz. A chunk the server labels at another rate is resampled first.
+    private func aligned(_ event: LiveEvent) -> LiveEvent {
+        guard case .audio(let pcm, let rate) = event else { return event }
+        let played = PCM.resample(pcm, from: rate, to: LiveProtocol.outputSampleRate)
+        return .audio(played, sampleRate: LiveProtocol.outputSampleRate)
+    }
+
+    private func socketClosed(code: Int, reason: String, detail: String) {
         if cleanedUp { return }
-        let message = reason ?? ""
-        let stale = message.localizedCaseInsensitiveContains("session not found") || message.contains("1008")
-        if stale, state.handle != nil { dispatch(.handleRejected) }
-        let quota = message.contains("429") || message.localizedCaseInsensitiveContains("quota") || message.contains("RESOURCE_EXHAUSTED")
-        if quota {
-            dispatch(.fatal(.quota, notice: "오늘 무료 한도를 다 썼어요."))
-        } else {
-            dispatch(.socketClosed)
+        let shown = reason.isEmpty ? detail : reason
+        let line = "close \(code) \(shown)".trimmingCharacters(in: .whitespaces)
+        VoiceDiagnostics.record(line)
+        if Quota.close(code: code, reason: reason) {
+            dispatch(.fatal(.quota, notice: "오늘 무료 한도를 다 썼어요. (\(line))"))
+            return
+        }
+        if Quota.staleHandle(code: code, reason: reason), state.handle != nil {
+            dispatch(.handleRejected)
+        }
+        dispatch(.socketClosed)
+        if case .ended = state.phase {
+            state.notice = "연결이 끊겼어요. (\(line))"
         }
     }
 

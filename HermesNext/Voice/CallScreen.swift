@@ -32,19 +32,6 @@ struct CallScreen: View {
             clock: clock
         )
         ZStack {
-            CallTokens.base.ignoresSafeArea()
-            AuraLayer(
-                animator: animator,
-                calm: reduceMotion,
-                detail: lowPower ? 2 : 4,
-                halfRate: lowPower,
-                mini: false,
-                palette: controller.palette,
-                signals: { controller.signalSnapshot() },
-                onRevealed: { revealed = $0 }
-            )
-            .ignoresSafeArea()
-            DotGrid().ignoresSafeArea()
             VStack(spacing: 0) {
                 CallTopBar(
                     name: name,
@@ -74,6 +61,23 @@ struct CallScreen: View {
                     )
                 }
             }
+        }
+        .background {
+            ZStack {
+                CallTokens.base
+                AuraLayer(
+                    animator: animator,
+                    calm: reduceMotion,
+                    detail: lowPower ? 2 : 4,
+                    halfRate: lowPower,
+                    mini: false,
+                    palette: controller.palette,
+                    signals: { controller.signalSnapshot() },
+                    onRevealed: { revealed = $0 }
+                )
+                DotGrid()
+            }
+            .ignoresSafeArea()
         }
         .opacity(progress < 0.35 ? 1 - Double(progress) / 0.35 : 0)
         .scaleEffect(1 - 0.06 * progress, anchor: .top)
@@ -249,7 +253,6 @@ struct CallOverlay: View {
         ZStack(alignment: .top) {
             if center.mode == .full, let controller = center.controller {
                 CallScreen(controller: controller, progress: center.collapse, onMinimize: minimize)
-                    .ignoresSafeArea()
                     .zIndex(2)
             }
             if center.mode == .minimized, let controller = center.controller, barVisible(controller) {

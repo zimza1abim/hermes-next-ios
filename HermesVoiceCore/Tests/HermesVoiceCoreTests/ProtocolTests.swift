@@ -68,6 +68,36 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(LiveProtocol.parse(#"{"goAway":{"timeLeft":12}}"#), [.goAway(seconds: 12)])
     }
 
+    func testAudioAndTranscriptContaining429AreNotQuota() {
+        let audio = #"{"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"QQ429quotaQQ"}}]}}}"#
+        XCTAssertFalse(Quota.frame(audio))
+        let transcript = #"{"serverContent":{"outputTranscription":{"text":"code 429 quota check"}}}"#
+        XCTAssertFalse(Quota.frame(transcript))
+        XCTAssertEqual(LiveProtocol.parse(transcript), [.outputTranscript("code 429 quota check")])
+        let messageOnly = #"{"error":{"code":400,"message":"see quota 429 in the text","status":"INVALID_ARGUMENT"}}"#
+        XCTAssertFalse(Quota.frame(messageOnly))
+    }
+
+    func testQuotaIsTheErrorObjectOrTheClose() {
+        XCTAssertTrue(Quota.frame(#"{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}"#))
+        XCTAssertTrue(Quota.frame(#"{"error":{"status":"RESOURCE_EXHAUSTED"}}"#))
+        XCTAssertTrue(Quota.close(code: 1011, reason: "RESOURCE_EXHAUSTED"))
+        XCTAssertTrue(Quota.close(code: 1008, reason: "RESOURCE_EXHAUSTED"))
+        XCTAssertTrue(Quota.close(code: 429, reason: ""))
+        XCTAssertTrue(Quota.close(code: 1011, reason: "quota exceeded"))
+        XCTAssertFalse(Quota.close(code: 1006, reason: "the log says 429"))
+        XCTAssertFalse(Quota.close(code: 1000, reason: "closed 429"))
+        XCTAssertFalse(Quota.staleHandle(code: 1006, reason: "mention 1008 in a sentence"))
+        XCTAssertTrue(Quota.staleHandle(code: 1008, reason: "session not found"))
+        XCTAssertFalse(Quota.staleHandle(code: 1008, reason: "RESOURCE_EXHAUSTED"))
+    }
+
+    func testResampleLeaves24kHzAndExpands16kHz() {
+        let pcm = Data(repeating: 0, count: 32)
+        XCTAssertEqual(PCM.resample(pcm, from: 24_000, to: 24_000), pcm)
+        XCTAssertEqual(PCM.resample(pcm, from: 16_000, to: 24_000).count, 48)
+    }
+
     private func json(_ text: String) throws -> [String: Any] {
         let data = try XCTUnwrap(text.data(using: .utf8))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

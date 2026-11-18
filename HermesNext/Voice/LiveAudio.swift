@@ -46,6 +46,8 @@ final class LiveAudio {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP, .duckOthers])
+            try? session.setPreferredSampleRate(24_000)
+            try? session.setPreferredIOBufferDuration(0.02)
             try session.setActive(true)
         } catch {
             return .failed
@@ -70,7 +72,10 @@ final class LiveAudio {
         }
         prepared = true
         transport.setPitch(0, prepared: true, running: engine.isRunning)
+        transport.setRate(1, prepared: true, running: engine.isRunning)
         transport.play(prepared: true, running: engine.isRunning)
+        let input = engine.inputNode.outputFormat(forBus: 0)
+        VoiceDiagnostics.record("audio \(session.sampleRate)Hz play 24000Hz in \(input.sampleRate)Hz ch \(input.channelCount)")
         startClock()
         UIDevice.current.isProximityMonitoringEnabled = true
         observe()
@@ -113,7 +118,28 @@ final class LiveAudio {
         }
         if !engine.isRunning { try? engine.start() }
         micOn = true
+        VoiceDiagnostics.record("mic \(hardware.sampleRate)Hz ch \(hardware.channelCount)")
         return true
+    }
+
+    /// Voice processing and a route change can rewrite the input channel count. The tap has to follow it.
+    private func rebindMicrophone() {
+        guard micOn else { return }
+        let input = engine.inputNode
+        let hardware = input.outputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, hardware.channelCount > 0, let targetFormat,
+              let converter = AVAudioConverter(from: hardware, to: targetFormat) else { return }
+        if let current = self.converter,
+           current.inputFormat.sampleRate == hardware.sampleRate,
+           current.inputFormat.channelCount == hardware.channelCount {
+            return
+        }
+        self.converter = converter
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: hardware) { [weak self] buffer, _ in
+            self?.consume(buffer)
+        }
+        VoiceDiagnostics.record("mic rebound \(hardware.sampleRate)Hz ch \(hardware.channelCount)")
     }
 
     func stopMicrophone() {
@@ -270,6 +296,11 @@ final class LiveAudio {
 
     private func consume(_ buffer: AVAudioPCMBuffer) {
         guard let converter, let targetFormat else { return }
+        if buffer.format.channelCount != converter.inputFormat.channelCount
+            || abs(buffer.format.sampleRate - converter.inputFormat.sampleRate) > 1 {
+            DispatchQueue.main.async { [weak self] in self?.rebindMicrophone() }
+            return
+        }
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
         guard capacity > 0, let output = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
@@ -304,6 +335,7 @@ final class LiveAudio {
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.route(speaker: self.speakerOn)
+            self.rebindMicrophone()
         })
         observers.append(center.addObserver(forName: UIDevice.proximityStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
@@ -315,6 +347,7 @@ final class LiveAudio {
         guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         if type == .began {
+            VoiceDiagnostics.record("audio interruption began")
             halt(restart: false)
             stopMicrophone()
             onFocusLost?(false)
@@ -322,6 +355,7 @@ final class LiveAudio {
         }
         let options = AVAudioSession.InterruptionOptions(rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
         guard options.contains(.shouldResume), prepared, transport.player.engine != nil else { return }
+        VoiceDiagnostics.record("audio interruption ended")
         try? engine.start()
         transport.play(prepared: prepared, running: engine.isRunning)
         onFocusRegained?()

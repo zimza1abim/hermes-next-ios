@@ -198,3 +198,40 @@ public enum LiveProtocol {
         return text
     }
 }
+
+/// Quota is a structured signal. A "429" or "quota" inside audio or a transcript is not one.
+public enum Quota {
+    /// True when the JSON has an `error` object whose `status` is RESOURCE_EXHAUSTED or whose `code` is 429.
+    public static func frame(_ raw: String) -> Bool {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = object["error"] as? [String: Any] else { return false }
+        if let status = error["status"] as? String,
+           status.caseInsensitiveCompare("RESOURCE_EXHAUSTED") == .orderedSame {
+            return true
+        }
+        if let code = error["code"] as? NSNumber, code.intValue == 429 { return true }
+        if let code = error["code"] as? String,
+           code == "429" || code.caseInsensitiveCompare("RESOURCE_EXHAUSTED") == .orderedSame {
+            return true
+        }
+        return false
+    }
+
+    /// Websocket close. 1011/1008 plus RESOURCE_EXHAUSTED, a close code of 429, or a quota token
+    /// in the close reason. The digits 429 inside a longer reason are not a match.
+    public static func close(code: Int, reason: String) -> Bool {
+        if code == 429 { return true }
+        let text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.range(of: "RESOURCE_EXHAUSTED", options: .caseInsensitive) != nil { return true }
+        let serverClose = code == 1011 || code == 1008 || code == 0
+        return serverClose && text.range(of: "quota", options: .caseInsensitive) != nil
+    }
+
+    /// A rejected resume handle. A quota close is not this, and a "1008" inside a sentence is not a code.
+    public static func staleHandle(code: Int, reason: String) -> Bool {
+        if close(code: code, reason: reason) { return false }
+        if reason.localizedCaseInsensitiveContains("session not found") { return true }
+        return code == 1008
+    }
+}

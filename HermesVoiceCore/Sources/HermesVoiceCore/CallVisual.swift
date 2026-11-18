@@ -105,6 +105,32 @@ public enum PCM {
         guard count > 0 else { return 0 }
         return Float(min(1, max(0, (sum / Double(count)).squareRoot() / Double(Int16.max))))
     }
+
+    /// Little-endian int16 mono, linear. The same rate returns the input, so a 24 kHz chunk is untouched.
+    public static func resample(_ pcm: Data, from source: Int, to target: Int) -> Data {
+        guard source > 0, target > 0, source != target else { return pcm }
+        let count = pcm.count / 2
+        guard count > 1 else { return pcm }
+        let outCount = max(1, Int((Double(count) * Double(target) / Double(source)).rounded()))
+        var output = Data(count: outCount * 2)
+        pcm.withUnsafeBytes { raw in
+            let samples = raw.bindMemory(to: Int16.self)
+            output.withUnsafeMutableBytes { destRaw in
+                let dest = destRaw.bindMemory(to: Int16.self)
+                let scale = Double(count - 1) / Double(max(outCount - 1, 1))
+                for index in 0..<outCount {
+                    let position = Double(index) * scale
+                    let left = min(Int(position), count - 1)
+                    let right = min(left + 1, count - 1)
+                    let fraction = position - Double(left)
+                    let mixed = Double(samples[left]) + (Double(samples[right]) - Double(samples[left])) * fraction
+                    let clamped = min(max(mixed, Double(Int16.min)), Double(Int16.max))
+                    dest[index] = Int16(clamped.rounded())
+                }
+            }
+        }
+        return output
+    }
 }
 
 /// 20 ms playback windows. The call screen reads "what the speaker is saying now" from here.

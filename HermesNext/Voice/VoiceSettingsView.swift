@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import HermesVoiceCore
 
 /// Voice, persona, language and the Gemini key. The key is the only value that goes in the Keychain.
@@ -8,6 +9,7 @@ struct VoiceSettingsView: View {
     @State private var key = ""
     @State private var masked = GeminiKey.masked()
     @State private var notice: String?
+    @State private var lastError = VoiceDiagnostics.last
 
     private var botKey: String? { store.profile?.lowercased() }
     private var botTitle: String { store.openBot?.title ?? "이 봇" }
@@ -24,6 +26,7 @@ struct VoiceSettingsView: View {
                 section("나") { assistantRow }
                 section(botTitle) { perBotRow }
                 section("통화") { toggles }
+                section("마지막 오류") { lastErrorBlock }
                 soulNote
                 previewButton
                 if let notice {
@@ -38,6 +41,22 @@ struct VoiceSettingsView: View {
         .navigationTitle("음성 대화")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: settings) { _, next in VoiceSettingsStore.save(next) }
+        .onAppear { lastError = VoiceDiagnostics.last }
+    }
+
+    private var lastErrorBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(lastError ?? "아직 없어요.")
+                .font(.app(size: 12.5, design: .monospaced))
+                .foregroundStyle(Rose.text)
+                .textSelection(.enabled)
+            Button("복사") {
+                UIPasteboard.general.string = lastError ?? ""
+                notice = "복사했어요."
+            }
+            .font(.app(size: 14, weight: .medium))
+            .disabled(lastError == nil)
+        }
     }
 
     private var keySection: some View {

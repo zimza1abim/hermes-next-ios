@@ -55,7 +55,10 @@ public final class EnginePlayback: @unchecked Sendable {
 
     public func setRate(_ rate: Float, prepared: Bool, running: Bool) {
         guard ready(prepared: prepared, running: running) else { return }
-        pitch.rate = min(max(rate, 0.5), 2)
+        let clamped = min(max(rate, 0.5), 2)
+        pitch.rate = clamped
+        // Unity speed stays off the time-pitch unit. Left on, it adds a watery tone at 1.0.
+        pitch.bypass = abs(clamped - 1) < 0.02
     }
 
     public func setPitch(_ cents: Float, prepared: Bool, running: Bool) {
