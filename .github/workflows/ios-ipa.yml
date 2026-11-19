@@ -3,7 +3,7 @@ name: Unsigned iOS IPA
 on:
   push:
     branches:
-      - cursor/**
+      - main
   pull_request:
   workflow_dispatch:
 
